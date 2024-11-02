@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package paxos;
+
+/*
+ * Paxos service definition
+ */
+service Paxos {
+
+    // Function to request transfer of amount
+    rpc Transfer (TransferReq) returns (TransferRes) {}
+
+    // Function to print client's balance
+    rpc GetBalance (google.protobuf.Empty) returns (Balance) {}
+
+    // Function to print server's local logs
+    rpc GetLogs (google.protobuf.Empty) returns (Logs) {}
+
+    // Function to print server's persisted transaction blocks
+    rpc GetDBLogs (google.protobuf.Empty) returns (DBLogs) {}
+
+    // Function to send prepare request
+    rpc Prepare (PrepareReq) returns (PrepareRes) {}
+
+    // Function to request acceptance of a value
+    rpc Accept (AcceptReq) returns (AcceptRes) {}
+
+    // Function to commit a transaction block
+    rpc Commit (CommitReq) returns (google.protobuf.Empty) {}
+
+    // Function to replicate transaction block
+    rpc Sync (SyncReq) returns (SyncRes) {}
+}
+
+
+/*
+ * Message definitions
+ */
+
+// Money transfer request
+message TransferReq {
+    int32 id = 1;
+    string receiver = 2;
+    int32 amount = 3;
+}
+
+// Response to money transfer request
+message TransferRes {
+    bool ack = 1;
+    int32 id = 2;
+    string server_id = 3;
+}
+
+message Balance {
+    int32 amount = 1;
+}
+
+// Proposal that is sent during the prepare phase
+message Proposal {
+    int32 number = 1;
+    string server_id = 2;
+}
+
+// An individual transaction 
+message Transaction {
+    int32 id = 1;
+    string sender = 2;
+    string receiver = 3;
+    int32 amount = 4;
+}
+
+message Logs {
+    repeated Transaction logs = 1;
+}
+
+message TransactionBlock {
+    int32 block_id = 1;
+    Proposal proposal = 2;
+    Logs logs = 3;
+}
+
+message DBLogs {
+    repeated TransactionBlock blocks = 1;
+}
+
+// The pre-prepare message to initiate consensus
+message PrePrepareReq {
+    int32 view;
+    int32 seq_number;
+    string digest;
+    Proposal proposal = 1;
+    int32 last_committed_block = 2;
+}
+
+// The promise message sent as response to prepare
+message PrepareRes {
+    bool ack = 1;
+    Proposal proposal = 2;
+    string server_id = 3;
+    int32 last_committed_block = 4;
+    optional Logs logs = 5;
+    optional Proposal accept_num = 6;
+    optional Logs accept_val = 7;
+}
+
+// Accept request sent by proposer
+message AcceptReq {
+    Proposal proposal = 1;
+    int32 last_committed_block = 2;
+    Logs logs = 3;
+}
+
+// Accept response sent by acceptors
+message AcceptRes {
+    bool ack = 1;
+    Proposal proposal = 2;
+}
+
+// Commit request sent by proposer
+message CommitReq {
+    Proposal proposal = 1;
+}
+
+// Combination of AcceptReq + CommitReq (used for catch up)
+message SyncReq {
+    // proposal number corresponding to the committed block
+    int32 last_committed_block = 1;
+}
+
+message SyncRes {
+    bool ack = 1;
+    int32 block_id = 2;
+    Proposal proposal = 3;
+    Logs block = 4;
+    string server_id = 5;
+}
