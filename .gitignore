@@ -6,3 +6,4 @@
 *.db
 test/*
 src/thirdparty
+keys
