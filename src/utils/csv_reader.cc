@@ -38,7 +38,7 @@ types::Transaction CSVReader::parseTransaction(const std::string& column) {
     return t;
 }
         
-std::vector<std::string> CSVReader::parseAliveServers(const std::string& column) {
+std::vector<std::string> CSVReader::parseServers(const std::string& column) {
     std::vector<std::string> servers;
     std::string server;
     std::istringstream stream(column);
@@ -89,10 +89,15 @@ types::CSVLine CSVReader::parseCSVLine(const std::string& line) {
     // Parse the set of alive servers
     std::vector<std::string> aliveServers;
     if (!columns.at(2).empty()) {
-        aliveServers = this->parseAliveServers(columns.at(2));
+        aliveServers = this->parseServers(columns.at(2));
     }
 
-    return { setNumber, t, aliveServers };
+    std::vector<std::string> byzantineServers;
+    if (!columns.at(3).empty()) {
+        byzantineServers = this->parseServers(columns.at(3));
+    }
+
+    return { setNumber, t, aliveServers, byzantineServers };
 }
 
     
@@ -121,11 +126,13 @@ CSVReader::CSVReader(const std::string& filename) {
 int CSVReader::readNextSet(types::TransactionSet& t) {
     this->currentSetNo += 1;
     // swap current and next transaction sets
-    std::swap(this->currentTransactionSet.servers, this->nextTransactionSet.servers);
+    std::swap(this->currentTransactionSet.aliveServers, this->nextTransactionSet.aliveServers);
+    std::swap(this->currentTransactionSet.byzantineServers, this->nextTransactionSet.byzantineServers);
     std::swap(this->currentTransactionSet.transactions, this->nextTransactionSet.transactions);
 
     // clear the state of next transaction set
-    this->nextTransactionSet.servers.clear();
+    this->nextTransactionSet.aliveServers.clear();
+    this->nextTransactionSet.byzantineServers.clear();
     this->nextTransactionSet.transactions.clear();
     
     std::string line;
@@ -135,11 +142,13 @@ int CSVReader::readNextSet(types::TransactionSet& t) {
         if (l.setNo == this->currentSetNo) {
             // 1st row of 1st set
             this->currentTransactionSet.transactions.push_back(l.transaction);
-            this->currentTransactionSet.servers = l.servers;
+            this->currentTransactionSet.aliveServers = l.aliveServers;
+            this->currentTransactionSet.byzantineServers = l.byzantineServers;
         } else if (l.setNo == this->currentSetNo + 1) {
             // 1st row of any but 1st set
             this->nextTransactionSet.transactions.push_back(l.transaction);
-            this->nextTransactionSet.servers = l.servers;
+            this->nextTransactionSet.aliveServers = l.aliveServers;
+            this->nextTransactionSet.byzantineServers = l.byzantineServers;
             break;
         } else {
             // Any but 1st row of any set
@@ -147,12 +156,13 @@ int CSVReader::readNextSet(types::TransactionSet& t) {
         } 
     }
 
-    if (this->currentTransactionSet.servers.empty() && this->currentTransactionSet.transactions.empty()) {
+    if (this->currentTransactionSet.transactions.empty()) {
         return 0;
     }
 
     t.setNo = this->currentSetNo;
-    t.servers = this->currentTransactionSet.servers;
+    t.aliveServers = this->currentTransactionSet.aliveServers;
+    t.byzantineServers = this->currentTransactionSet.byzantineServers;
     t.transactions = this->currentTransactionSet.transactions;
 
     return this->currentTransactionSet.transactions.size();

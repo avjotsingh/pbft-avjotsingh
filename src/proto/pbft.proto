@@ -1,0 +1,188 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+
+package pbft;
+
+service PbftServer {
+    rpc Transfer(Message) returns (google.protobuf.Empty) {}
+    rpc PrePrepare(PrePrepareRequest) returns (google.protobuf.Empty) {}
+    rpc PrePrepareOk(Request) returns (google.protobuf.Empty) {}
+    rpc Prepare(ProofRequest) returns (google.protobuf.Empty) {}
+    rpc PrepareOk(Request) returns (google.protobuf.Empty) {}
+    rpc Commit(ProofRequest) returns (google.protobuf.Empty) {}
+    rpc ViewChange(ViewChangeReq) returns (google.protobuf.Empty) {}
+    rpc NewView(NewViewReq) returns (google.protobuf.Empty) {}
+    rpc Checkpoint(CheckpointReq) returns (google.protobuf.Empty) {}
+    rpc Sync(SyncReq) returns (google.protobuf.Empty) {}
+    rpc SyncRes(SyncResp) returns (google.protobuf.Empty) {}
+
+    rpc GetLog(google.protobuf.Empty) returns (GetLogRes) {}
+    rpc GetDB(google.protobuf.Empty) returns (GetDBRes) {}
+    rpc GetStatus(GetStatusReq) returns (GetStatusRes) {}
+    rpc GetViewChanges(google.protobuf.Empty) returns (GetViewChangesRes) {}
+}
+
+service PbftClient {
+    rpc Process(Transactions) returns (google.protobuf.Empty) {}
+    rpc Notify(Response) returns (google.protobuf.Empty) {}
+
+    rpc GetPerformance(google.protobuf.Empty) returns (GetPerformanceRes) {}
+}
+
+
+/*
+ * Message definitions
+ */
+message TransactionData {   // Captures data of transaction requested by client
+    string sender = 1;
+    string receiver = 2;
+    int32 amount = 3;
+    int64 timestamp = 4; 
+}
+
+message Message {           // Request sent by client. Includes transaction data and signature
+    TransactionData data = 1;
+    Signature signature = 2;
+}
+
+message ResponseData {      // Captures transfer response data from a node
+    TransactionData tdata = 1;
+    bool ack = 2;
+    int32 view_num = 3;
+}
+
+message Response {          // Response sent by any node to a client's transfer request
+    ResponseData data = 1;
+    Signature signature = 2;
+}
+
+message Context {           // Context for protocol messages
+    int32 view_num = 1;
+    int32 sequence_num = 2;
+    string digest = 3;
+}
+
+message Signature {
+    bytes sig = 1;
+    int32 server_id = 3;
+}
+
+message SignatureVec {
+    repeated bytes signatures = 1;
+    int32 server_id = 2;
+}
+
+message Request {           // Protocol request sent by any node in any phase (pre-prepare, prepare, commit)
+    Context data = 1;
+    SignatureVec sig_vec = 2;
+}
+
+message PrePrepareRequest {
+    Request r = 1;
+    Message m = 2;
+}
+
+message ProofRequest {
+    Context data = 1;
+    repeated SignatureVec sig_vecs = 2;
+}
+
+message CheckpointData {
+    int32 c_seq_num = 1;
+    string c_digest = 2;
+}
+
+message CheckpointReq {
+    CheckpointData data = 1;
+    Signature signature = 2;
+}
+
+message PrepareProof {
+    Request pre_prepare = 1;
+    repeated Request prepares = 2;
+}
+
+message ViewChangeData {
+    int32 view_num = 1;
+    CheckpointData last_checkpoint = 2;
+    repeated CheckpointReq cproofs = 3;
+    repeated PrepareProof pproofs = 4;
+}
+
+message ViewChangeReq {
+    ViewChangeData data = 1;
+    Signature signature = 2;
+}
+
+message NewViewData {
+    int32 view_num = 1;
+    repeated ViewChangeReq vproofs = 2;
+    repeated Request pre_prepares = 3;
+}
+
+message NewViewReq {
+    NewViewData data = 1;
+    Signature signature = 2;
+}
+
+message SyncReq {
+    CheckpointData data = 1;
+    Signature signature = 2;
+}
+
+message SyncResData {
+    CheckpointData cdata = 1;
+    map<string, int32> balances = 2; 
+}
+
+message SyncResp {
+    SyncResData data = 1;
+    Signature signature = 2;
+}
+
+message LogEntry {
+    TransactionData t = 1;
+    int32 matching_prepares = 2;
+    int32 matching_commits = 3;
+}
+
+message GetLogRes {
+    repeated LogEntry entries = 1;
+}
+
+message GetDBRes {
+    repeated int32 balances = 1;
+}
+
+message GetStatusReq {
+    int32 seq_num = 1;
+}
+
+message GetStatusRes {
+    string status = 1;
+}
+
+message ViewChangesResEntry {
+    int32 view_num = 1;
+    string initiator = 2;
+    int32 stable_checkpoint = 3;
+    repeated int32 prepared_entries = 4;
+}
+
+message GetViewChangesRes {
+    repeated ViewChangesResEntry view_changes = 1;
+}
+
+message Transaction {
+    string sender = 1;
+    string receiver = 2;
+    int32 amount = 3;
+}
+
+message Transactions {
+    repeated Transaction transactions = 1;
+}
+
+message GetPerformanceRes {
+    double performance = 1;
+}

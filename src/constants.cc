@@ -11,4 +11,17 @@ namespace Constants {
         { "S6", "localhost:50056" },
         { "S7", "localhost:50057" }
     };
+
+    std::map<std::string, std::string> clientAddresses = {
+        { "A", "localhost:60060" },
+        { "B", "localhost:60061" },
+        { "C", "localhost:60062" },
+        { "D", "localhost:60063" },
+        { "E", "localhost:60064" },
+        { "F", "localhost:60065" },
+        { "G", "localhost:60066" },
+        { "H", "localhost:60067" },
+        { "I", "localhost:60068" },
+        { "J", "localhost:60069" },
+    };
 }

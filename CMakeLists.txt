@@ -1,79 +1,69 @@
-# Copyright 2018 gRPC authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# cmake build file for C++ helloworld example.
-# Assumes protobuf and gRPC have been installed using cmake.
-# See cmake_externalproject/CMakeLists.txt for all-in-one cmake build
-# that automatically builds all the dependencies before building helloworld.
-
 cmake_minimum_required(VERSION 3.20)
 
-project(paxos C CXX)
+project(pbft C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(OPENSSL_ROOT_DIR "/opt/homebrew/Cellar/openssl@3/")
 
 include(common.cmake)
 
-
 # Proto file
-get_filename_component(paxos_proto "./src/proto/paxos.proto" ABSOLUTE)
-get_filename_component(paxos_proto_path "${paxos_proto}" PATH)
+get_filename_component(pbft_proto "./src/proto/pbft.proto" ABSOLUTE)
+get_filename_component(pbft_proto_path "${pbft_proto}" PATH)
 
 # Generated sources
-set(paxos_proto_srcs "${CMAKE_CURRENT_BINARY_DIR}/paxos.pb.cc")
-set(paxos_proto_hdrs "${CMAKE_CURRENT_BINARY_DIR}/paxos.pb.h")
-set(paxos_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/paxos.grpc.pb.cc")
-set(paxos_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/paxos.grpc.pb.h")
+set(pbft_proto_srcs "${CMAKE_CURRENT_BINARY_DIR}/pbft.pb.cc")
+set(pbft_proto_hdrs "${CMAKE_CURRENT_BINARY_DIR}/pbft.pb.h")
+set(pbft_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/pbft.grpc.pb.cc")
+set(pbft_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/pbft.grpc.pb.h")
 add_custom_command(
-      OUTPUT "${paxos_proto_srcs}" "${paxos_proto_hdrs}" "${paxos_grpc_srcs}" "${paxos_grpc_hdrs}"
+      OUTPUT "${pbft_proto_srcs}" "${pbft_proto_hdrs}" "${pbft_grpc_srcs}" "${pbft_grpc_hdrs}"
       COMMAND ${_PROTOBUF_PROTOC}
       ARGS --grpc_out "${CMAKE_CURRENT_BINARY_DIR}"
         --cpp_out "${CMAKE_CURRENT_BINARY_DIR}"
-        -I "${paxos_proto_path}"
+        -I "${pbft_proto_path}"
         --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
-        "${paxos_proto}"
-      DEPENDS "${paxos_proto}")
-
+        "${pbft_proto}"
+      DEPENDS "${pbft_proto}")
 
 # Include generated *.pb.h files
 include_directories(${CMAKE_CURRENT_BINARY_DIR} 
   ${CMAKE_CURRENT_SOURCE_DIR} 
+  "${CMAKE_CURRENT_SOURCE_DIR}/crypto"
   "${CMAKE_CURRENT_SOURCE_DIR}/types"
   "${CMAKE_CURRENT_SOURCE_DIR}/utils"
   "${CMAKE_CURRENT_SOURCE_DIR}/client"
   "${CMAKE_CURRENT_SOURCE_DIR}/server")
 
-# paxos_grpc_proto
-add_library(paxos_grpc_proto
-  ${paxos_grpc_srcs}
-  ${paxos_grpc_hdrs}
-  ${paxos_proto_srcs}
-  ${paxos_proto_hdrs})
-target_link_libraries(paxos_grpc_proto
+# pbft_grpc_proto
+add_library(pbft_grpc_proto
+  ${pbft_grpc_srcs}
+  ${pbft_grpc_hdrs}
+  ${pbft_proto_srcs}
+  ${pbft_proto_hdrs})
+target_link_libraries(pbft_grpc_proto
   absl::check
   ${_REFLECTION}
   ${_GRPC_GRPCPP}
   ${_PROTOBUF_LIBPROTOBUF})
 
+
+# Find OpenSSL
+find_package(OpenSSL 3 REQUIRED)
+
+# Add crypto subdirectory
+add_subdirectory(src/crypto)
 
 # Add utils subdirectory
 add_subdirectory(src/utils)
-target_link_libraries(utils)
 
+# Build the client executable
+file(GLOB_RECURSE CLIENT_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/client/*.cc" "src/constants.cc")
 
-# Add client subdirectory
-add_subdirectory(src/client)
-target_link_libraries(client
-  paxos_grpc_proto
+add_executable(pbftclient ${CLIENT_SOURCES})
+target_link_libraries(pbftclient
+  pbft_grpc_proto
+  crypto
+  utils
   absl::check
   absl::flags
   absl::flags_parse
@@ -83,21 +73,14 @@ target_link_libraries(client
   ${_PROTOBUF_LIBPROTOBUF})
 
 
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/src/thirdparty/SQLiteCpp)
-
-# Gather all .cc files in the server directory
+# Build the server executable
 file(GLOB_RECURSE SERVER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/server/*.cc" "src/constants.cc")
 
-message(STATUS "SERVER_SOURCES: ${SERVER_SOURCES}")
-
-add_executable(paxosserver ${SERVER_SOURCES})
-target_link_libraries(paxosserver
-  paxos_grpc_proto
-  client
-  SQLiteCpp
-  sqlite3
-  pthread
-  dl
+add_executable(pbftserver ${SERVER_SOURCES})
+target_link_libraries(pbftserver
+  pbft_grpc_proto
+  crypto
+  utils
   absl::check
   absl::flags
   absl::flags_parse
@@ -106,6 +89,6 @@ target_link_libraries(paxosserver
   ${_GRPC_GRPCPP}
   ${_PROTOBUF_LIBPROTOBUF})
 
-add_executable(driver "src/driver.cc" "src/constants.cc")
-target_link_libraries(driver utils client)
+add_executable(driver "src/driver.cc" "src/constants.cc" "src/app_client.cc")
+target_link_libraries(driver pbft_grpc_proto utils)
   

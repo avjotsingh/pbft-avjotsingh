@@ -5,43 +5,36 @@
 
 namespace types {
 
-    struct Proposal {
-        int proposalNum;
-        std::string serverName;
-    };
-
-    struct Transaction {
+    struct Transaction {        // An individual transaction
         int id;
         std::string sender;
         std::string receiver;
         int amount;
 
-        bool operator<(const Transaction& other) const {
-            if (sender < other.sender) return true;
-            else return id < other.id;
-        }
-
-        bool operator==(const Transaction& other) const {
-            return id == other.id 
-                && sender == other.sender 
-                && receiver == other.receiver 
-                && amount == other.amount;
-        }
-
-        std::string toString() {
+        std::string toString() const {
             return "{" + std::to_string(id) + "," + sender + "," + receiver + "," + std::to_string(amount) + "}";
         }
     };
 
-    struct TransactionSet {
+    struct TransactionSet {     // A transaction set in input CSV file
         int setNo;
         std::vector<Transaction> transactions;
-        std::vector<std::string> servers;
+        std::vector<std::string> aliveServers;
+        std::vector<std::string> byzantineServers;
+    };
+    
+    enum MessageStatus { NO_STATUS, PRE_PREPARED, PREPARED, COMMITTED, EXECUTED };
+
+    struct PbftLogEntry {
+        types::Transaction t;
+        int matchingPrepares;
+        int matchingCommits;
     };
 
-    struct TransactionBlock {
-        int id;
-        types::Proposal commitProposal;
-        std::vector<Transaction> block;
+    struct ViewChangeInfo {
+        int viewNum;
+        int stableCheckpoint;
+        std::string initiator;
+        std::vector<int> preparedEntries;
     };
 }

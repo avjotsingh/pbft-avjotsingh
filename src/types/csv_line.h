@@ -7,6 +7,7 @@ namespace types {
     struct CSVLine {
         int setNo;
         Transaction transaction;
-        std::vector<std::string> servers;    
+        std::vector<std::string> aliveServers;   
+        std::vector<std::string> byzantineServers;    
     };
 }

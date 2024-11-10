@@ -20,6 +20,6 @@ private:
     
     void stripLineEndings(std::string& line);
     types::Transaction parseTransaction(const std::string& column);
-    std::vector<std::string> parseAliveServers(const std::string& column);
+    std::vector<std::string> parseServers(const std::string& column);
     types::CSVLine parseCSVLine(const std::string& line);
 };

@@ -4,9 +4,10 @@
 namespace types {
     enum Commands {
         PROCESS_NEXT_SET,
-        PRINT_BALANCE,
         PRINT_LOG,
         PRINT_DB,
+        PRINT_STATUS,
+        PRINT_VIEW,
         PRINT_PERFORMANCE,
         EXIT
     };
@@ -14,5 +15,6 @@ namespace types {
     struct AppCommand {
         Commands command;
         std::string serverName;
+        int sequenceNum;
     };
 }

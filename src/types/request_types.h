@@ -3,12 +3,16 @@
 namespace types {
     enum RequestTypes {
         TRANSFER,
+        PRE_PREPARE,
+        PRE_PREPARE_MSG,
+        PRE_PREPARE_OK,
         PREPARE,
-        ACCEPT,
+        PREPARE_OK,
         COMMIT,
-        SYNC,
-        GET_BALANCE,
-        GET_LOGS,
-        GET_DB_LOGS
+        TRIGGER_VIEW_CHANGE,
+        VIEW_CHANGE,
+        NEW_VIEW,
+        NOTIFY,
+        PROCESS
     };
 }

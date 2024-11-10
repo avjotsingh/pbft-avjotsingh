@@ -6,7 +6,7 @@
 #include <vector>
 #include <thread>
 
-#include "client/app_client.h"
+#include "app_client.h"
 #include "utils/commands_parser.h"
 #include "utils/csv_reader.h"
 #include "utils/utils.h"
@@ -18,9 +18,11 @@ void mainloop(CSVReader* reader, AppClient* client) {
     std::string command;
     types::AppCommand c;
     types::TransactionSet set;
-    int balance;
-    std::vector<types::Transaction> logs;
-    std::vector<types::TransactionBlock> dbLogs;
+    std::vector<types::PbftLogEntry> logs;
+    std::vector<std::vector<std::string>> db;
+    std::vector<std::string> status;
+    std::string serverName;
+    std::vector<types::ViewChangeInfo> viewChanges;
     double performance;
 
 
@@ -39,45 +41,115 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     if (!reader->readNextSet(set)) {
                         std::cout << "No more transaction sets to read..." << std::endl;
                     } else {
-                        for (std::string& s: Constants::serverNames) {
-                            if (std::find(set.servers.begin(), set.servers.end(), s) != set.servers.end()) {
-                                // ensure that the desired servers are running
-                                Utils::startServer(s);
-                            } else {
-                                // ensure that the servers not in the transaction set are stopped
-                                Utils::killServer(s);
-                            }
+                        Utils::killAllServers();
+                        for (std::string& s: set.aliveServers) {
+                            Utils::startServer(s, false);
+                        }
+
+                        for (std::string&s : set.byzantineServers) {
+                            Utils::startServer(s, true);
                         }
 
                         sleep(5);   // wait for servers to start before issuing transactions
-                        client->processTransactions(set.transactions);
+                        client->ProcessTransactions(set.transactions);
                     }
-                    break;
-
-                case types::PRINT_BALANCE:
-                    client->GetBalance(c.serverName, balance);
-                    std::cout << "Balance on " << c.serverName << ": " << balance << std::endl;
                     break;
 
                 case types::PRINT_LOG:
                     logs.clear();
                     client->GetLogs(c.serverName, logs);
-                    std::cout << "Local logs on " << c.serverName << ": " << std::endl;
-                    for (types::Transaction& t: logs) {
-                        std::cout << "(" << t.id << ", " << t.sender << ", " << t.receiver << ", " << t.amount << ")" << std::endl;
+                    std::cout << "Log on " << c.serverName << ": " << std::endl;
+                    
+                    std::cout << std::setw(10) << "index| ";
+                    for (int i = 0; i < logs.size(); i++) {
+                        std::cout << std::setw(10) << logs[i].t.id << "| ";
                     }
+                    std::cout << std::endl;
+
+                    std::cout << std::setw(10) << "transaction| ";
+                    for (int i = 0; i < logs.size(); i++) {
+                        std::cout << std::setw(10) << "(" << logs[i].t.sender << ", " << logs[i].t.receiver << ", " << logs[i].t.amount << "| ";
+                    }
+                    std::cout << std::endl;
+
+                    // std::cout << std::setw(10) << "status| ";
+                    // for (int i = 0; i < logs.size(); i++) {
+                    //     std::cout << std::setw(10) << logs[i].status << "| ";
+                    // }
+                    // std::cout << std::endl;
+
+                    std::cout << std::setw(10) << "prepares| ";
+                    for (int i = 0; i < logs.size(); i++) {
+                        std::cout << std::setw(10) << logs[i].matchingPrepares << "| ";
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << std::setw(10) << "commits| ";
+                    for (int i = 0; i < logs.size(); i++) {
+                        std::cout << std::setw(10) << logs[i].matchingCommits << "| ";
+                    }
+                    std::cout << std::endl;
                     break;
 
                 case types::PRINT_DB:
-                    dbLogs.clear();
-                    client->GetDBLogs(c.serverName, dbLogs);
-                    std::cout << "DB logs on " << c.serverName << ": " << std::endl;
-                    for (auto& block : dbLogs) {
-                        std::cout << "> Block" << block.id << std::endl;
-                        for (types::Transaction& t: block.block) {
-                            std::cout << "(" << t.id << ", " << t.sender << ", " << t.receiver << ", " << t.amount << ")" << std::endl;
+                    db.clear();
+                    client->GetDb(db, set.aliveServers);
+                    std::cout << "DB:" << std::endl;
+
+                    std::cout << std::setw(10) << "Server| ";
+                    for (int i = 0; i < Constants::clientAddresses.size(); i++) {
+                        std::cout << 'A' + i << "| "; 
+                    }
+                    std::cout << std::endl;
+
+                    for (int i = 0; i < Constants::serverAddresses.size(); i++) {
+                        std::cout << std::setw(10) << 'S' + i << "| ";
+                        for (int j = 0; j < Constants::clientAddresses.size(); j++) {
+                            std::cout << std::setw(10) << db[i][j] << "| ";
                         }
                     }
+                    std::cout << std::endl;
+                    break;
+
+                case types::PRINT_STATUS:
+                    status.clear();
+                    client->GetStatus(c.sequenceNum, status);
+                    std::cout << "Server |";
+                    for (int i = 0; i < Constants::serverAddresses.size(); i++) {
+                        std::cout << std::setw(10) << 'S' + i << "| ";
+                    }
+                    std::cout << std::endl;
+
+                    for (int i = 0; i < Constants::serverAddresses.size(); i++) {
+                        std::cout << std::setw(10) << status[i] << "| ";
+                    }
+
+                    std::cout << std::endl;
+                    break;
+
+                case types::PRINT_VIEW:
+                    viewChanges.clear();
+                    // pick a non-byzantine server
+                    for (auto&s : set.aliveServers) {
+                        if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
+                            serverName = s;
+                            break;
+                        }
+                    }
+
+                    client->GetViewChanges(serverName, viewChanges);
+                    std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP|" << std::setw(30) << "Prepared's|";
+                    std::cout << std::endl;
+                    for (auto& v: viewChanges) {
+                        std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint << "|";
+                        std::cout << std::setw(30);
+                        for (auto& p: v.preparedEntries) {
+                            std::cout << p << ", ";
+                        }
+                        std::cout << std::endl;
+                    }
+
+                    std::cout << std::endl;
                     break;
 
                 case types::PRINT_PERFORMANCE:
@@ -111,10 +183,9 @@ int main(int argc, char **argv) {
     std::string filename = argv[1];
     std::thread t;
     try {
-        Utils::initializeServers();
+        Utils::initializeClients();
         AppClient* client = new AppClient(); 
         CSVReader* reader = new CSVReader(filename);
-        std::thread t(&AppClient::consumeTransferReplies, client);
         mainloop(reader, client);
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
