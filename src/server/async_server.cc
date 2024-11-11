@@ -43,7 +43,6 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   lastExecuted = -1;
   state_ = NORMAL;
 
-
   rpcTimeoutSeconds = 2;
   viewChangeTimeoutSeconds = 0;
   viewChangeTimeoutDelta = 2;

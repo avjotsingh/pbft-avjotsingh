@@ -160,9 +160,10 @@ private:
     std::queue<types::Transaction> toProcess;
 
     int f;
-    int rpcTimeoutSeconds;
     int currentView;
     int clusterSize;
+
+    int rpcTimeoutSeconds;
     int transferTimeoutSeconds;
 
     double performance;
