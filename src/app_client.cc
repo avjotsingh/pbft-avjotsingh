@@ -15,6 +15,8 @@ using pbft::GetStatusRes;
 using pbft::ViewChangesResEntry;
 using pbft::GetViewChangesRes;;
 
+// TODO implement get performance
+
 AppClient::AppClient() {
     for (auto it = Constants::serverAddresses.begin(); it != Constants::serverAddresses.end(); it++) {
         std::string server = it->first;
@@ -42,7 +44,10 @@ void AppClient::ProcessTransactions(std::vector<types::Transaction>& transaction
     }
 
     for (auto& stub_: clientStubs_) {
-        stub_->Process(&context, txns, &reply);
+        Status status = stub_->Process(&context, txns, &reply);
+        if (!status.ok()) {
+            std::cout << "Process RPC failed" << std::endl;
+        }
     }
 }
 
@@ -53,7 +58,6 @@ void AppClient::GetLogs(std::string serverName, std::vector<types::PbftLogEntry>
     GetLogRes reply;
 
     Status status = serverStubs_[serverId]->GetLog(&context, request, &reply);
-
     if (status.ok()) {
         for (int i = 0; i < reply.entries_size(); i++) {
             logs.push_back({
@@ -62,6 +66,8 @@ void AppClient::GetLogs(std::string serverName, std::vector<types::PbftLogEntry>
                 reply.entries(i).matching_commits()
             });
         }
+    } else {
+        std::cout << "GetLog RPC failed" << std::endl;
     }
 }
 
@@ -77,7 +83,7 @@ void AppClient::GetDb(std::vector<std::vector<std::string>>& db, std::vector<std
                 balances.push_back("-");
             }
         } else {
-            Status status = serverStubs_[i]->GetDB(&context, request, &reply);
+            Status status = serverStubs_[i]->GetDb(&context, request, &reply);
             for (int j = 0; j < Constants::clientAddresses.size(); j++) {
                 balances.push_back(std::to_string(reply.balances(j)));
             }
@@ -97,6 +103,8 @@ void AppClient::GetStatus(int seqNum, std::vector<std::string>& status) {
         Status s = serverStubs_[i]->GetStatus(&context, request, &reply);
         if (s.ok()) {
             status.push_back(reply.status());
+        } else {
+            std::cout << "GetStatus RPC failed" << std::endl;
         }
     }
 }
@@ -108,21 +116,24 @@ void AppClient::GetViewChanges(std::string serverName, std::vector<types::ViewCh
     GetViewChangesRes reply;
 
     int serverId = serverName[1] - '1';
-    serverStubs_[serverId]->GetViewChanges(&context, request, &reply);
+    Status status = serverStubs_[serverId]->GetViewChanges(&context, request, &reply);
+    if (status.ok()) {
+            for (int i = 0; i < reply.view_changes_size(); i++) {
+            const ViewChangesResEntry& e = reply.view_changes(i);
+            // std::vector<int> preparedEntries;
+            // for (int j = 0; j < e.prepared_entries_size(); j++) {
+                // preparedEntries.push_back(e.prepared_entries(j));
+            // }
 
-    for (int i = 0; i < reply.view_changes_size(); i++) {
-        const ViewChangesResEntry& e = reply.view_changes(i);
-        std::vector<int> preparedEntries;
-        for (int j = 0; j < e.prepared_entries_size(); j++) {
-            preparedEntries.push_back(e.prepared_entries(j));
+            viewChanges.push_back({
+                e.view_num(),
+                e.stable_checkpoint(),
+                e.initiator()
+                // preparedEntries
+            });
         }
-
-        viewChanges.push_back({
-            e.view_num(),
-            e.stable_checkpoint(),
-            e.initiator(),
-            preparedEntries
-        });
+    } else {
+        std::cout << "GetViewChanges RPC failed" << std::endl;
     }
 }
 

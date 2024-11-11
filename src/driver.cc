@@ -72,12 +72,6 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     }
                     std::cout << std::endl;
 
-                    // std::cout << std::setw(10) << "status| ";
-                    // for (int i = 0; i < logs.size(); i++) {
-                    //     std::cout << std::setw(10) << logs[i].status << "| ";
-                    // }
-                    // std::cout << std::endl;
-
                     std::cout << std::setw(10) << "prepares| ";
                     for (int i = 0; i < logs.size(); i++) {
                         std::cout << std::setw(10) << logs[i].matchingPrepares << "| ";
@@ -138,14 +132,10 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     }
 
                     client->GetViewChanges(serverName, viewChanges);
-                    std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP|" << std::setw(30) << "Prepared's|";
+                    std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP";
                     std::cout << std::endl;
                     for (auto& v: viewChanges) {
-                        std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint << "|";
-                        std::cout << std::setw(30);
-                        for (auto& p: v.preparedEntries) {
-                            std::cout << p << ", ";
-                        }
+                        std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint;
                         std::cout << std::endl;
                     }
 

@@ -14,20 +14,23 @@ using pbft::Response;
 using pbft::Transactions;
 using pbft::Transaction;
 
-    
-PbftClientImpl::PbftClientImpl(int id, std::string name) {
 
+// TODO implement get performance
+
+PbftClientImpl::PbftClientImpl(int id, std::string name) {
     clientId = id;
     clientName = name;
-    rpcTimeoutSeconds = 2;
-    currentView = 0;
+
     f = 2;
+    currentView = 0;
     clusterSize = 7;
+    
+    rpcTimeoutSeconds = 2;
+    transferTimeoutSeconds = 4;
 
     transactionsIssued = 0;
     transactionsProcessed = 0;
     totalTimeTaken = 0;
-    transferTimeoutSeconds = 10;
 }
 
 PbftClientImpl::~PbftClientImpl() {
@@ -96,6 +99,7 @@ int PbftClientImpl::getLeaderId() {
 }
 
 void PbftClientImpl::doTransfers() {
+    
     if (transfers.empty()) return;
 
     auto tinfo = transfers.front();
@@ -125,9 +129,10 @@ void PbftClientImpl::doTransfers() {
     sig->set_server_id(clientId);
 
     // Start a timer for the transfer request. If f + 1 matching replies are not received by this time, then broadcast
-    std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     setTransferTimer(tinfo, transferTimeoutSeconds);
 
+    // Send the request to leader for processing
+    std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     ResponseData *call = new ResponseData(this, responseCQ.get());
     call->sendMessage(request, stubs_[leaderId], rpcDeadline);
 }
@@ -152,14 +157,16 @@ void PbftClientImpl::transferBroadcast() {
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
 
-    // Start a timer for the transfer request. If f + 1 matching replies are not received by this time, then broadcast
-    setTransferTimer(info, transferTimeoutSeconds);
-
+    // Broadcast the request to all replicas
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     for (auto& stub: stubs_) {
         ResponseData *call = new ResponseData(this, responseCQ.get());
         call->sendMessage(request, stub, rpcDeadline);
     }
+
+    // Start a new timer for the transfer request.
+    setTransferTimer(info, transferTimeoutSeconds);
+
 }
 
 void PbftClientImpl::processNotify(Response& request) {
@@ -229,8 +236,6 @@ void PbftClientImpl::setTransferTimer(TransferInfo& info, int timeoutSeconds) {
     // Store the variable to prevent it from going out-of-scope which causes blocking
     transferTimers.push(std::move(f));
 }
-
-
 
 void RunServer(int clientId, std::string clientName, std::string targetAddress) {
   PbftClientImpl client(clientId, clientName);

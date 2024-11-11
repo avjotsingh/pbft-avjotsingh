@@ -45,6 +45,8 @@ using pbft::CheckpointData;
 using pbft::Response;
 using pbft::Signature;
 using pbft::SignatureVec;
+using pbft::SyncReq;
+using pbft::SyncResp;
 
 
 // Server Implementation
@@ -62,9 +64,9 @@ public:
     void processPrepareOk(Request& request);
     void processCommit(ProofRequest& request);
     void processViewChange(ViewChangeReq& request);
-    bool processNewView(NewViewReq& request);
+    void processNewView(const NewViewReq& request);
     void processCheckpoint(CheckpointReq& request);
-    void processSync(SyncReq& request);
+    void processSync(SyncReq& request, SyncResp& reply);
 
     void processGetLog(GetLogRes& reply);
     void processGetDB(GetDBRes& reply);
@@ -76,7 +78,9 @@ private:
     class RequestData {
         public:
             RequestData(PbftServer::AsyncService* service, PbftServerImpl* server, ServerCompletionQueue* cq, types::RequestTypes type):
-                service_(service), server_(server), cq_(cq), responder(&ctx_), type_(type) {
+                service_(service), server_(server), cq_(cq), 
+                responder(&ctx_), syncResponder(&ctx_), getLogResponder(&ctx_), getDbResponder(&ctx_), getStatusResponder(&ctx_), getViewChangesResponder(&ctx_),
+                type_(type) {
                     status_ = CREATE;
                     Proceed();
                 }
@@ -110,6 +114,24 @@ private:
                         case types::NEW_VIEW:
                             service_->RequestNewView(&ctx_, &newViewReq, &responder, cq_, cq_, this);
                             break;
+                        case types::CHECKPOINT:
+                            service_->RequestCheckpoint(&ctx_, &checkpointReq, &responder, cq_, cq_, this);
+                            break;
+                        case types::SYNC:
+                            service_->RequestSync(&ctx_, &syncReq, &syncResponder, cq_, cq_, this);
+                            break;
+                        case types::GET_LOG:
+                            service_->RequestGetLog(&ctx_, &emptyReq, &getLogResponder, cq_, cq_, this);
+                            break;
+                        case types::GET_DB:
+                            service_->RequestGetDb(&ctx_, &emptyReq, &getDbResponder, cq_, cq_, this);
+                            break;
+                        case types::GET_STATUS:
+                            service_->RequestGetStatus(&ctx_, &getStatusReq, &getStatusResponder, cq_, cq_, this);
+                            break;
+                        case types::GET_VIEW_CHANGES:
+                            service_->RequestGetViewChanges(&ctx_, &emptyReq, &getViewChangesResponder, cq_, cq_, this);
+                            break;
                         default:
                             break;
                     }
@@ -118,27 +140,73 @@ private:
                     switch (type_) {
                         case types::TRANSFER:
                             server_->processTransfer(transferReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::PRE_PREPARE:
                             server_->processPrePrepare(prePrepareReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::PRE_PREPARE_OK:
                             server_->processPrePrepareOk(prePrepareOkReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::PREPARE:
                             server_->processPrepare(prepareReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::PREPARE_OK:
                             server_->processPrepareOk(prepareOkReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::COMMIT:
                             server_->processCommit(commitReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::VIEW_CHANGE:
                             server_->processViewChange(viewChangeReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         case types::NEW_VIEW:
                             server_->processNewView(newViewReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::CHECKPOINT:
+                            server_->processCheckpoint(checkpointReq);
+                            responder.Finish(reply, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::SYNC:
+                            server_->processSync(syncReq, syncResp);
+                            syncResponder.Finish(syncResp, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::GET_LOG:
+                            server_->GetLog(getLogRes);
+                            getLogResponder.Finish(getLogRes, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::GET_DB:
+                            server_->GetDB(getDbRes);
+                            getDbResponder.Finish(getDbRes, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::GET_STATUS:
+                            server_->GetStatus(getStatusReq, getStatusRes);
+                            getStatusResponder.Finish(getStatusRes, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::GET_VIEW_CHANGES:
+                            server_->GetViewChanges(getViewChangesRes);
+                            getViewChangesResponder.Finish(getViewChangesRes, Status::OK, this);
+                            status_ = FINISH;
                             break;
                         default:
                             break;
@@ -165,11 +233,28 @@ private:
             Request commitOkReq;
             ViewChangeReq viewChangeReq;
             NewViewReq newViewReq;
+            CheckpointReq checkpointReq;
+            SyncReq syncReq;
+            SyncResp syncResp;
+            GetLogRes getLogRes;
+            GetDBRes getDbRes;
+            GetStatusReq getStatusReq;
+            GetStatusRes getStatusRes;
+            GetViewChangesRes getViewChangesRes;
+            Empty emptyReq;
+            
             Empty reply;
+
 
             // The means to get back to the client.
             ServerAsyncResponseWriter<Empty> responder;
+            ServerAsyncResponseWriter<SyncResp> syncResponder;
+            ServerAsyncResponseWriter<GetLogRes> getLogResponder;
+            ServerAsyncResponseWriter<GetDBRes> getDbResponder;
+            ServerAsyncResponseWriter<GetStatusRes> getStatusResponder;
+            ServerAsyncResponseWriter<GetViewChangesRes> getViewChangesResponder;
 
+            
             // Let's implement a tiny state machine with the following states.
             enum CallStatus { CREATE, PROCESS, FINISH };
             CallStatus status_;  // The current serving state.
@@ -246,14 +331,7 @@ private:
 
             void sendSync(SyncReq& request, std::unique_ptr<PbftServer::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
                 context.set_deadline(deadline);
-                responseReader = stub_->PrepareAsyncSync(&context, request, cq_);
-                responseReader->StartCall();
-                responseReader->Finish(&reply, &status, (void*) this);
-            }
-
-            void sendSyncRes(SyncResp& request, std::unique_ptr<PbftServer::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
-                context.set_deadline(deadline);
-                responseReader = stub_->PrepareAsyncSyncRes(&context, request, cq_);
+                syncResponseReader = stub_->PrepareAsyncSync(&context, request, cq_);
                 responseReader->StartCall();
                 responseReader->Finish(&reply, &status, (void*) this);
             }
@@ -277,6 +355,7 @@ private:
             ClientContext context;
             Status status;
             std::unique_ptr<ClientAsyncResponseReader<google::protobuf::Empty>> responseReader;
+            std::unique_ptr<ClientAsyncResponseReader<SyncResp>> syncResponseReader;
     };
 
     struct MessageInfo {
@@ -327,13 +406,13 @@ private:
     std::map<int, CheckpointInfo*> checkpoints;
     int lastExecuted;
 
-
     int rpcTimeoutSeconds;
     int viewChangeTimeoutSeconds;
     int viewChangeTimeoutDelta;
     int optimisticTimeoutSeconds;
-    std::queue<std::future<void>> viewChangeTimers;
-    std::queue<std::future<void>> optimisticTimers;
+    int retryTimeoutSeconds;
+
+    std::queue<std::future<void>> futures;
     std::map<int, std::vector<ViewChangeReq>> viewChangeMessages;
     std::map<int, std::map<long, bool>> lastExecutedResult;
 
@@ -370,6 +449,8 @@ private:
     void triggerViewChange(int viewNum);
     void setViewChangeTimer(bool consecutiveViewChange, int newView, int timeoutSeconds, std::string digest);
     void setOptimisticTimer(int index);
+    void retryNewView(const NewViewReq& request, int retryTimeoutSeconds);
+
     void executePending(int lastCommitted);
     void checkpoint();
     void notifyClient(int clientId, Message& m, bool res);

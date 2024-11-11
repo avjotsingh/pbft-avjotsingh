@@ -13,11 +13,10 @@ service PbftServer {
     rpc ViewChange(ViewChangeReq) returns (google.protobuf.Empty) {}
     rpc NewView(NewViewReq) returns (google.protobuf.Empty) {}
     rpc Checkpoint(CheckpointReq) returns (google.protobuf.Empty) {}
-    rpc Sync(SyncReq) returns (google.protobuf.Empty) {}
-    rpc SyncRes(SyncResp) returns (google.protobuf.Empty) {}
+    rpc Sync(SyncReq) returns (SyncResp) {}
 
     rpc GetLog(google.protobuf.Empty) returns (GetLogRes) {}
-    rpc GetDB(google.protobuf.Empty) returns (GetDBRes) {}
+    rpc GetDb(google.protobuf.Empty) returns (GetDBRes) {}
     rpc GetStatus(GetStatusReq) returns (GetStatusRes) {}
     rpc GetViewChanges(google.protobuf.Empty) returns (GetViewChangesRes) {}
 }
@@ -166,7 +165,7 @@ message ViewChangesResEntry {
     int32 view_num = 1;
     string initiator = 2;
     int32 stable_checkpoint = 3;
-    repeated int32 prepared_entries = 4;
+//    repeated int32 prepared_entries = 4;
 }
 
 message GetViewChangesRes {

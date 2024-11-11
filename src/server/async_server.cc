@@ -17,26 +17,39 @@ using pbft::SyncResData;
 using pbft::PrepareProof;
 using pbft::ViewChangeData;
 using pbft::LogEntry;
+using pbft::ViewChangesResEntry;
 
-// TODO: Add Byzantine behaviour
 
 PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   serverId = id;
   serverName = name;
   isByzantine = byzantine;
-  srand(serverName[1] - '0');
-  
+
+  f = 2;
+  k = 20;
+
   currentView = 1;
   currentSequence = -1;
+  clusterSize = 7;
+
   lowWatermark = 0;
   highWatermark =  lowWatermark + k - 1;
-  log = std::vector<MessageInfo*>(k, nullptr);
-  
-  rpcTimeoutSeconds = 2;
-  viewChangeTimeoutSeconds = 10;
-  optimisticTimeoutSeconds = 10;
 
-  checkpointStepSize = 20;
+  log = std::vector<MessageInfo*>(k, nullptr);
+  digestToEntry = std::map<std::string, MessageInfo*>();
+
+  checkpointStepSize = 10;
+  lastStableCheckpointSeqNum = -1;
+  lastExecuted = -1;
+  state_ = NORMAL;
+
+
+  rpcTimeoutSeconds = 2;
+  viewChangeTimeoutSeconds = 0;
+  viewChangeTimeoutDelta = 2;
+  optimisticTimeoutSeconds = 2;
+  retryTimeoutSeconds = 2;
+
   lastExecuted = -1;
   for (unsigned char c = 'A'; c <= 'J'; c++) {
     balances[std::to_string(c)] = 10;
@@ -107,18 +120,11 @@ void PbftServerImpl::HandleRPCs() {
           static_cast<ResponseData*>(responseTag)->HandleRPCResponse();  // Process response
       }
 
-      // Clean up the queue of view change timers
-      if (!viewChangeTimers.empty()) {
-        std::future<void>& f = viewChangeTimers.front();
+      // Clean up the queue of futures
+      if (!futures.empty()) {
+        std::future<void>& f = futures.front();
         std::future_status status = f.wait_for(std::chrono::milliseconds(0));
-        if (status == std::future_status::ready) viewChangeTimers.pop();
-      }
-
-      // Clean up the queue of optimistic timers
-      if (!optimisticTimers.empty()) {
-        std::future<void>& f = optimisticTimers.front();
-        std::future_status status = f.wait_for(std::chrono::milliseconds(0));
-        if (status == std::future_status::ready) optimisticTimers.pop();
+        if (status == std::future_status::ready) futures.pop();
       }
   }
 }
@@ -139,7 +145,7 @@ void PbftServerImpl::sendRequest(Request& request, int receiverId, types::Reques
   std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
   switch (type) {
     case types::PRE_PREPARE_OK:
-      call->sendPrepareOk(request, stub_, deadline);
+      call->sendPrePrepareOk(request, stub_, deadline);
       break;
     case types::PREPARE_OK:
       call->sendPrepareOk(request, stub_, deadline);
@@ -255,19 +261,6 @@ void PbftServerImpl::sendSync(SyncReq& request, int senderId, int receiverId) {
   call->sendSync(request, stub_, deadline);
 }
 
-void PbftServerImpl::sendSyncRes(SyncResp& request, int senderId, int receiverId) {
-  // Sign the request
-  std::string dataString;
-  request.data().SerializeToString(&dataString);
-  addMACSignature(dataString, receiverId, request.mutable_signature());
-
-  // Send grpc request
-  ResponseData* call = new ResponseData(this, responseCQ.get());
-  std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(receiverId);
-  std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
-  call->sendSyncRes(request, stub_, deadline);
-}
-
 void PbftServerImpl::addMACSignature(std::string data, int receiverId, Signature* signature) {
   std::string binPath = Utils::macKeyPath(serverId, receiverId);
   signature->set_sig(crypto::signMAC(data, binPath));
@@ -361,8 +354,7 @@ void PbftServerImpl::processTransfer(Message& message) {
     call->sendTransfer(message, serverStubs_[getLeaderId()], deadline);    
     
     // Start a timer for view change. Triggers view change if the leader does not initiate the protocol on time
-    std::string digest = crypto::sha256Digest(dataString);
-    setViewChangeTimer(false, currentView + 1, viewChangeTimeoutDelta, digest);
+    setViewChangeTimer(false, currentView + 1, viewChangeTimeoutDelta, messageDigest);
     return;
   }
 
@@ -424,7 +416,9 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   int index = seqNum - lowWatermark;
 
   // Another entry with same view number and seq number already present
-  if (log[index] != nullptr && viewNum <= log[index]->prePrepare.data().view_num()) return;
+  if (log[index] != nullptr && 
+      (viewNum <= log[index]->prePrepare.data().view_num() 
+      || digest == log[index]->prePrepare.data().digest())) return;
   
   // Create an entry for this slot if needed
   if (log[index] == nullptr) log[index] = new MessageInfo();
@@ -441,7 +435,7 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   Request prePrepareOk;
   prePrepareOk.mutable_data()->CopyFrom(request.r().data());
 
-  // Append pre-prepare ok to valid prepare proofs
+  // Append own's pre-prepare ok to valid prepare proofs
   log[index]->prepareProofs[serverId] = prePrepareOk;
 
   // send pre-prepare-ok
@@ -472,27 +466,17 @@ void PbftServerImpl::processPrePrepareOk(Request& request) {
   log[index]->prepareProofs[request.sig_vec().server_id()] = request;
   
   // Check if 2f matching acks. If yes, set an optimistic timer
-  if (log[index]->prepareProofs.size() == 2 * f) {
+  if (!isByzantine && log[index]->prepareProofs.size() == 2 * f) {
     log[index]->mstatus = types::PREPARED;
 
-    // Add leader's own commit proof
-    Request r;
-    r.mutable_data()->CopyFrom(log[index]->prePrepare.data());
-    std::string dataString;
-    log[index]->prePrepare.data().SerializeToString(&dataString);
-    addMACSignature(dataString, r.mutable_sig_vec());
-    log[index]->commitProofs[serverId] = r;
-
+    // Wait to collect 3*f prepares. Then initiate either prepare or commit phase
     setOptimisticTimer(index);
   }
 }
 
 void PbftServerImpl::processPrepare(ProofRequest& request) {
   // Ignore if view change is in progress
-  if (state_ == VIEW_CHANGE) return;
-
-  // // Ignore request if not from leader
-  // if (request.signature().server_id() != getLeaderId()) return;
+  if (state_ == VIEW_CHANGE || isByzantine) return;
 
   // Check request validity
   int viewNum = request.data().view_num();
@@ -529,7 +513,7 @@ void PbftServerImpl::processPrepare(ProofRequest& request) {
   }
 
   // Check if 2f valid prepares
-  if (log[index]->prepareProofs.size() == 2 * f) {
+  if (!isByzantine && log[index]->prepareProofs.size() == 2 * f) {
       // Update log entry metadata
       log[index]->mstatus = types::PREPARED;
 
@@ -564,8 +548,16 @@ void PbftServerImpl::processPrepareOk(Request& request) {
   
   // Check if 2f + 1 matching acks. If yes, broadcast commit
   if (log[index]->commitProofs.size() == 2 * f + 1) {
+    log[index]->mstatus = types::COMMITTED;
     ProofRequest commit;
     commit.mutable_data()->CopyFrom(log[index]->prePrepare.data());
+
+    // Attach commit proofs
+    for (auto& pair: log[index]->commitProofs) {
+      SignatureVec* vec = request.mutable_sig_vec();
+      vec->CopyFrom(pair.second.sig_vec());
+    }
+
     sendRequestToAll(commit, types::COMMIT);
   }
 }
@@ -573,9 +565,6 @@ void PbftServerImpl::processPrepareOk(Request& request) {
 void PbftServerImpl::processCommit(ProofRequest& request) {
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
-
-  // // Ignore request if not from leader
-  // if (request.signature().server_id() != getLeaderId()) return;
 
   // Check request validity
   int viewNum = request.data().view_num();
@@ -588,7 +577,7 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
   int index = seqNum - lowWatermark;
 
   // Ignore if not pre-prepared
-  if (log[index] == nullptr || log[index]->mstatus != types::PRE_PREPARED) return;
+  if (log[index] == nullptr || !(log[index]->mstatus != types::PRE_PREPARED || log[index]->mstatus != types::PREPARED)) return;
 
   // Check for valid matching commits and update log entry metadata
   std::string dataString;
@@ -633,7 +622,7 @@ void PbftServerImpl::processViewChange(ViewChangeReq& request) {
 
   viewChangeMessages[newView].push_back(request);
 
-  // Check if non-leader and f + 1 matching view change messages
+  // Check if non-leader and f + 1 valid view change messages
   if (newView % clusterSize != serverId && viewChangeMessages[newView].size() == f + 1) {
       triggerViewChange(newView);
       // Set timer for consecutive view change
@@ -642,7 +631,7 @@ void PbftServerImpl::processViewChange(ViewChangeReq& request) {
   }
 
   // Check if leader and 2f matching view change messages
-  if (newView % clusterSize == serverId && viewChangeMessages[newView].size() == 2 * f) {
+  if (!isByzantine && newView % clusterSize == serverId && viewChangeMessages[newView].size() == 2 * f) {
     // Add leader's view change request
     ViewChangeReq viewChange;
     composeViewChangeRequest(newView, viewChange);
@@ -674,12 +663,12 @@ void PbftServerImpl::processViewChange(ViewChangeReq& request) {
   }
 }
 
-bool PbftServerImpl::processNewView(NewViewReq& request) {
+void PbftServerImpl::processNewView(const NewViewReq& request) {
   // Verify the MAC signature
-  if (!verifySignature(request)) return true;
+  if (!verifySignature(request)) return;
 
   // Ignore if the view change message is old
-  if (request.data().view_num() <= currentView) return true;
+  if (request.data().view_num() <= currentView) return;
 
   // Verify the view change messages
   int validViewChanges = 0;
@@ -688,7 +677,7 @@ bool PbftServerImpl::processNewView(NewViewReq& request) {
     if (verifyViewChange(proof)) validViewChanges++;
   }
 
-  if (validViewChanges < 2 * f + 1) return true;
+  if (validViewChanges < 2 * f + 1) return;
 
   // Iterate over view change messages and compute the set O
   std::vector<Request> bigO;
@@ -704,12 +693,13 @@ bool PbftServerImpl::processNewView(NewViewReq& request) {
   // Request if sync if node is lagging
   if (lastStableCheckpoint.c_seq_num() > lastStableCheckpointSeqNum) {
     // Compose a sync request
-    SyncReq request;
-    request.mutable_data()->CopyFrom(lastStableCheckpoint);
+    SyncReq syncReq;
+    syncReq.mutable_data()->CopyFrom(lastStableCheckpoint);
 
-    // Send a sycn request
-    sendSync(request, serverId, checkpointServerId);
-    return false;
+    // Send a sync request
+    sendSync(syncReq, serverId, checkpointServerId);
+    retryNewView(request, retryTimeoutSeconds);
+    return;
   }
 
   // Verify the correctness of bigO sent in new view message
@@ -717,13 +707,13 @@ bool PbftServerImpl::processNewView(NewViewReq& request) {
     Request& prePrepare = bigO[i];
     if (prePrepare.data().view_num() != request.data().pre_prepares(i).data().view_num()
           || prePrepare.data().sequence_num() != request.data().pre_prepares(i).data().sequence_num()
-          || prePrepare.data().digest() != request.data().pre_prepares(i).data().digest()) return true;
+          || prePrepare.data().digest() != request.data().pre_prepares(i).data().digest()) return;
   }
 
   // Big O verified. Enter new view
   state_ = NORMAL;
   currentView = request.data().view_num();
-  viewChangeTimeoutSeconds = viewChangeTimeoutDelta;
+  viewChangeTimeoutSeconds = 0;
 
   // Send out a prepare message for each of the pre prepares
   for (int i = 0; i < request.data().pre_prepares_size(); i++) {
@@ -733,7 +723,7 @@ bool PbftServerImpl::processNewView(NewViewReq& request) {
     sendRequest(prePrepareOk, getLeaderId(), types::PRE_PREPARE_OK);
   }
 
-  return true;
+  return;
 }
 
 void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
@@ -779,17 +769,15 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
   }
 }
 
-void PbftServerImpl::processSync(SyncReq& request) {
+void PbftServerImpl::processSync(SyncReq& request, SyncResp& reply) {
   // Verify the signature
   if (!verifySignature(request)) return;
 
   // Check for request validity
   if (lastStableCheckpointSeqNum < request.data().c_seq_num()) return;
-  if (lastStableCheckpointDigest != request.data().c_digest()) return;
+  // if (lastStableCheckpointDigest != request.data().c_digest()) return;
 
-  SyncResp reply;
   SyncResData* data = reply.mutable_data();
-  
   CheckpointData* cdata = data->mutable_cdata();
   cdata->set_c_seq_num(lastStableCheckpointSeqNum);
   cdata->set_c_digest(lastStableCheckpointDigest);
@@ -798,7 +786,10 @@ void PbftServerImpl::processSync(SyncReq& request) {
     (*data->mutable_balances())[pair.first] = pair.second;
   }
 
-  sendSyncRes(reply, serverId, request.signature().server_id());
+  // Sign the reply
+  std::string dataString;
+  data->SerializeToString(&dataString);
+  addMACSignature(dataString, request.signature().server_id(), request.mutable_signature());
 }
 
 bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
@@ -968,7 +959,7 @@ void PbftServerImpl::setViewChangeTimer(bool consecutiveViewChange, int newView,
   });
 
   // Store the variable to prevent it from going out-of-scope which causes blocking
-  viewChangeTimers.push(std::move(f));
+  futures.push(std::move(f));
 }
 
 void PbftServerImpl::setOptimisticTimer(int index) {
@@ -992,13 +983,15 @@ void PbftServerImpl::setOptimisticTimer(int index) {
       log[index]->mstatus = types::COMMITTED;
       log[index]->commitProofs = log[index]->prepareProofs;
       
-      // // Append leader's proof to request
-      // SignatureVec* vec = request.add_sig_vecs();
-      // std::string dataString;
-      // log[index]->prePrepare.data().SerializeToString(&dataString);
-      // addMACSignature(dataString, serverId, vec);
+      // Add leader's own commit proof
+      Request r;
+      r.mutable_data()->CopyFrom(log[index]->prePrepare.data());
+      std::string dataString;
+      log[index]->prePrepare.data().SerializeToString(&dataString);
+      addMACSignature(dataString, r.mutable_sig_vec());
+      log[index]->commitProofs[serverId] = r;
+      request.add_sig_vecs()->CopyFrom(r.sig_vec());
 
-      log[index]->mstatus = types::COMMITTED;
       sendRequestToAll(request, types::COMMIT);
       executePending(index);
 
@@ -1006,11 +999,26 @@ void PbftServerImpl::setOptimisticTimer(int index) {
       // Broadcast a prepare request
       sendRequestToAll(request, types::PREPARE);
     }
+
   });
 
   // Store the variable to prevent it from going out-of-scope which causes blocking
-  optimisticTimers.push(std::move(f));
+  futures.push(std::move(f));
 }
+
+
+void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSeconds) {
+    std::future<void> f = std::async(std::launch::async, [this, request, retryTimeoutSeconds] () {
+      std::this_thread::sleep_for(std::chrono::seconds(retryTimeoutSeconds));
+
+      if (request.data().view_num() > currentView) {
+        processNewView(request);
+      }
+    });
+
+    futures.push(std::move(f));
+}
+
 
 void PbftServerImpl::executePending(int lastCommitted) {
   for (int i = lastExecuted + 1; i <= lastCommitted; i++) {
@@ -1129,7 +1137,14 @@ void PbftServerImpl::GetStatus(GetStatusReq& request, GetStatusRes& reply) {
 }
 
 void PbftServerImpl::GetViewChanges(GetViewChangesRes& reply) {
-  // TODO: return a valid response
+  for (auto& pair: viewChangeMessages) {  
+    for (auto& v: pair.second) {
+      ViewChangesResEntry* e = reply.add_view_changes();
+      e->set_view_num(pair.first);
+      e->set_initiator("S" + std::to_string(v.signature().server_id() + 1));
+      e->set_stable_checkpoint(v.data().last_checkpoint().c_seq_num());
+    }
+  }
 }
 
 void RunServer(int serverId, std::string serverName, std::string serverAddress, bool isByzantine) {

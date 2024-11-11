@@ -35,6 +35,6 @@ namespace types {
         int viewNum;
         int stableCheckpoint;
         std::string initiator;
-        std::vector<int> preparedEntries;
+        // std::vector<int> preparedEntries;
     };
 }
