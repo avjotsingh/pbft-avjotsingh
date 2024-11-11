@@ -67,28 +67,34 @@ private:
                         
                         case types::PROCESS:
                             service_->RequestProcess(&ctx_, &processReq, &responder, cq_, cq_, this);
+                            break;
 
                         default:
                             break;
                     }
                 } else if (status_ == PROCESS) {
-                    status_ = FINISH;
+                    new RequestData(service_, server_, cq_, type_);
+
                     switch (type_) {
                         case types::NOTIFY:
                             server_->processNotify(notifyReq);
                             responder.Finish(response, Status::OK, this);
+                            status_ = FINISH;
                             break;
 
                         case types::PROCESS:
                             server_->processProcess(processReq);
                             responder.Finish(response, Status::OK, this);
+                            status_ = FINISH;
                             break;
 
                         default:
+                            status_ = FINISH;
                             break;
                     }
                 } else {
-                    CHECK_EQ(status_, FINISH);
+                    std::cout << "request finished " << std::endl;
+                    // CHECK_EQ(status_, FINISH);
                     delete this;
                 }
             }

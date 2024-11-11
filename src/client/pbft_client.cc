@@ -208,6 +208,8 @@ void PbftClientImpl::processNotify(Response& request) {
 void PbftClientImpl::processProcess(Transactions& transactions) {
     for (int i = 0; i < transactions.transactions_size(); i++) {
         const Transaction& t = transactions.transactions(i);
+        if (t.sender() != clientName) continue;
+
         TransferInfo tinfo;
         tinfo.t.id = i;
         tinfo.t.sender = t.sender();
@@ -243,9 +245,9 @@ void RunServer(int clientId, std::string clientName, std::string targetAddress) 
 }
 
 int main(int argc, char** argv) {
-  
+//   absl::InitializeLog();
   if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << "<client_id> <client_name> <target_address>" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " <client_id> <client_name> <target_address>" << std::endl;
     return 1;
   }
 

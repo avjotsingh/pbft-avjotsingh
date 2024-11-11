@@ -43,8 +43,14 @@ void Utils::startServer(std::string serverName, bool isByzantine) {
             Utils::serverPIDs.insert({ serverName, pid });
         } else {
             // server process
+            FILE *new_stdout = freopen(std::string(serverName + ".txt").c_str(), "w", stdout);
+            if (!new_stdout) {
+                perror("Failed to redirect stdout");    
+            }
+
+
             int serverId = serverName[1] - '1';
-            execl("./pbftserver", "pbftserver", serverId, serverName.c_str(), targetAddress.c_str(), isByzantine, nullptr);
+            execl("./pbftserver", "pbftserver", std::to_string(serverId).c_str(), serverName.c_str(), targetAddress.c_str(), isByzantine ? "true" : "false", nullptr);
             // if execl fails
             throw std::runtime_error("Failed to start server: " + serverName);
         }
@@ -64,8 +70,14 @@ void Utils::startClient(std::string clientName) {
     } else if (pid > 0) {
         Utils::clientPIDs.insert({ clientName, pid });
     } else {
-        // server process
-        execl("./pbftclient", "pbftclient", clientName.c_str(), targetAddress.c_str(), nullptr);
+        // client process
+        FILE *new_stdout = freopen(std::string(clientName + ".txt").c_str(), "w", stdout);
+        if (!new_stdout) {
+            perror("Failed to redirect stdout");    
+        }
+
+        int clientId = clientName[0] - 'A';
+        execl("./pbftclient", "pbftclient", std::to_string(clientId).c_str(), clientName.c_str(), targetAddress.c_str(), nullptr);
         // if execl fails
         throw std::runtime_error("Failed to start server: " + clientName);
     }

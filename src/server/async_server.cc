@@ -50,8 +50,9 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   retryTimeoutSeconds = 2;
 
   lastExecuted = -1;
-  for (unsigned char c = 'A'; c <= 'J'; c++) {
-    balances[std::to_string(c)] = 10;
+  balances = std::map<std::string, int>();
+  for (auto& pair: Constants::clientAddresses) {
+    balances[pair.first] = 10;
   }
 }
 
@@ -94,6 +95,12 @@ void PbftServerImpl::HandleRPCs() {
   new RequestData(&service_, this, requestCQ.get(), types::COMMIT);
   new RequestData(&service_, this, requestCQ.get(), types::VIEW_CHANGE);
   new RequestData(&service_, this, requestCQ.get(), types::NEW_VIEW);
+  new RequestData(&service_, this, requestCQ.get(), types::SYNC);
+  new RequestData(&service_, this, requestCQ.get(), types::CHECKPOINT);
+  new RequestData(&service_, this, requestCQ.get(), types::GET_LOG);
+  new RequestData(&service_, this, requestCQ.get(), types::GET_DB);
+  new RequestData(&service_, this, requestCQ.get(), types::GET_STATUS);
+  new RequestData(&service_, this, requestCQ.get(), types::GET_VIEW_CHANGES);
 
   void* requestTag;
   bool requestOk;
@@ -324,6 +331,7 @@ bool PbftServerImpl::verifySignature(const SyncReq& request) {
 }
 
 void PbftServerImpl::processTransfer(Message& message) {
+  std::cout << serverName << " got transfer request" << std::endl;
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
 
@@ -1159,7 +1167,7 @@ int main(int argc, char** argv) {
   }
 
   try {
-    RunServer(std::stoi(argv[1]), argv[2], argv[3], argv[4]);
+    RunServer(std::stoi(argv[1]), argv[2], argv[3], strcmp(argv[4], "true") == 0);
   } catch (std::exception& e) {
     std::cerr << "Exception: " << e.what() << std::endl;
   }

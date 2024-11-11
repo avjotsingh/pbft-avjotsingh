@@ -18,6 +18,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
     std::string command;
     types::AppCommand c;
     types::TransactionSet set;
+    bool firstSet = true;
     std::vector<types::PbftLogEntry> logs;
     std::vector<std::vector<std::string>> db;
     std::vector<std::string> status;
@@ -41,7 +42,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     if (!reader->readNextSet(set)) {
                         std::cout << "No more transaction sets to read..." << std::endl;
                     } else {
-                        Utils::killAllServers();
+                        if (!firstSet) Utils::killAllServers();
                         for (std::string& s: set.aliveServers) {
                             Utils::startServer(s, false);
                         }
@@ -150,6 +151,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
                 case types::EXIT:
                     std::cout << "Exiting..." << std::endl;
                     Utils::killAllServers();
+                    Utils::killAllClients();
                     exit = true;
                     break;
 
@@ -157,6 +159,9 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     std::runtime_error("Unknown command type: " + std::to_string(c.command));
                     break;
             }
+        
+            if (firstSet) firstSet = false;
+
         } catch (std::exception& e) {
             std::cerr << "Exception: " << e.what() << std::endl;
         }
@@ -171,7 +176,6 @@ int main(int argc, char **argv) {
     }
 
     std::string filename = argv[1];
-    std::thread t;
     try {
         Utils::initializeClients();
         AppClient* client = new AppClient(); 
@@ -179,7 +183,6 @@ int main(int argc, char **argv) {
         mainloop(reader, client);
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
-        t.join();
         exit(1);
     } 
     

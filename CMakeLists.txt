@@ -92,3 +92,6 @@ target_link_libraries(pbftserver
 add_executable(driver "src/driver.cc" "src/constants.cc" "src/app_client.cc")
 target_link_libraries(driver pbft_grpc_proto utils)
   
+
+add_executable(test_server "src/test_server.cc")
+target_link_libraries(test_server pbft_grpc_proto utils)

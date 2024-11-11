@@ -32,10 +32,9 @@ AppClient::AppClient() {
 }
 
 void AppClient::ProcessTransactions(std::vector<types::Transaction>& transactions) {
-    ClientContext context;
+    std::cout << "got process transactions" << std::endl;
     Transactions txns;
-    Empty reply;
-
+    
     for (auto& t: transactions) {
         Transaction* tx = txns.add_transactions();
         tx->set_sender(t.sender);
@@ -44,6 +43,9 @@ void AppClient::ProcessTransactions(std::vector<types::Transaction>& transaction
     }
 
     for (auto& stub_: clientStubs_) {
+        ClientContext context;
+        Empty reply;
+
         Status status = stub_->Process(&context, txns, &reply);
         if (!status.ok()) {
             std::cout << "Process RPC failed" << std::endl;

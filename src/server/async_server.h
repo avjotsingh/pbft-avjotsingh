@@ -136,6 +136,8 @@ private:
                             break;
                     }
                 } else if (status_ == PROCESS) {
+                    new RequestData(service_, server_, cq_, type_);
+                    
                     status_ = FINISH;
                     switch (type_) {
                         case types::TRANSFER:

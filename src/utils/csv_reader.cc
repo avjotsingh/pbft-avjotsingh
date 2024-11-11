@@ -53,7 +53,8 @@ std::vector<std::string> CSVReader::parseServers(const std::string& column) {
             server += c;
         }
     }
-    servers.push_back(server);
+
+    if (!server.empty()) servers.push_back(server);
 
     return servers;
 }
