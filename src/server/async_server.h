@@ -408,6 +408,7 @@ private:
     std::map<int, CheckpointInfo*> checkpoints;
     int lastExecuted;
 
+
     int rpcTimeoutSeconds;
     int viewChangeTimeoutSeconds;
     int viewChangeTimeoutDelta;
