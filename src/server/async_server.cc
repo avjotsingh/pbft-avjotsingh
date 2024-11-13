@@ -20,6 +20,8 @@ using pbft::LogEntry;
 using pbft::ViewChangesResEntry;
 
 
+// TODO sendRequest fails if some servers are down
+
 PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   serverId = id;
   serverName = name;
@@ -45,11 +47,10 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
 
   rpcTimeoutSeconds = 2;
   viewChangeTimeoutSeconds = 0;
-  viewChangeTimeoutDelta = 2;
-  optimisticTimeoutSeconds = 2;
-  retryTimeoutSeconds = 2;
+  viewChangeTimeoutDelta = 20;
+  optimisticTimeoutSeconds = 3;
+  retryTimeoutSeconds = 5;
 
-  lastExecuted = -1;
   balances = std::map<std::string, int>();
   for (auto& pair: Constants::clientAddresses) {
     balances[pair.first] = 10;
@@ -83,6 +84,7 @@ void PbftServerImpl::run(std::string targetAddress) {
   }
 
   std::cout << "Server running on " << targetAddress << std::endl;
+  std::cout << "isbyzantine " << isByzantine << std::endl;
   HandleRPCs();
 }
 
@@ -118,12 +120,17 @@ void PbftServerImpl::HandleRPCs() {
 
       // Handle request events
       if (requestStatus == grpc::CompletionQueue::NextStatus::GOT_EVENT && requestOk) {
-          static_cast<RequestData*>(requestTag)->Proceed();  // Process request
+          RequestData* call = static_cast<RequestData*>(requestTag);
+          call->Proceed();
       }
 
       // Handle response events
       if (responseStatus == grpc::CompletionQueue::NextStatus::GOT_EVENT && responseOk) {
-          static_cast<ResponseData*>(responseTag)->HandleRPCResponse();  // Process response
+          ResponseData* call = static_cast<ResponseData*>(responseTag);
+          // if (!call->status.ok()) {
+          //   std::cout << "RPC failed" << std::endl;
+          // }
+          call->HandleRPCResponse();
       }
 
       // Clean up the queue of futures
@@ -146,36 +153,37 @@ void PbftServerImpl::sendRequest(Request& request, int receiverId, types::Reques
   addMACSignature(dataString, request.mutable_sig_vec());
 
   // Send grpc request
-  ResponseData* call = new ResponseData(this, responseCQ.get());
-  std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(receiverId);
-  std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
-  switch (type) {
-    case types::PRE_PREPARE_OK:
-      call->sendPrePrepareOk(request, stub_, deadline);
-      break;
-    case types::PREPARE_OK:
-      call->sendPrepareOk(request, stub_, deadline);
-      break;
-    default:
-      break;
+  printf("[sendRequest] receiver id %d\n", receiverId);
+  if (type == types::PRE_PREPARE_OK || type == types::PREPARE_OK) {
+      
+    ResponseData* call = new ResponseData(this, responseCQ.get());
+    std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(receiverId);
+    std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
+    
+    if (type == types::PRE_PREPARE_OK) {
+        call->sendPrePrepareOk(request, stub_, deadline);
+    } else {
+        call->sendPrepareOk(request, stub_, deadline);
+    }    
   }
 }
 
 void PbftServerImpl::sendRequest(ProofRequest& request, int receiverId, types::RequestTypes type) {
   // Send grpc request
-  ResponseData* call = new ResponseData(this, responseCQ.get());
-  std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(receiverId);
-  std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
-  switch (type) {
-    case types::PREPARE:
+
+  printf("[sendRequest Proof] receiver id %d\n", receiverId);
+  if (type == types::PREPARE || type == types::COMMIT) {
+
+    ResponseData* call = new ResponseData(this, responseCQ.get());
+    std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(receiverId);
+    std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
+    if (type == types::PREPARE) {
       call->sendPrepare(request, stub_, deadline);
-      break;
-    case types::COMMIT:
+    } else {
       call->sendCommit(request, stub_, deadline);
-      break;
-    default:
-      break;
+    }
   }
+  
 }
 
 void PbftServerImpl::sendRequestToAll(ProofRequest& request, types::RequestTypes type) {
@@ -184,18 +192,16 @@ void PbftServerImpl::sendRequestToAll(ProofRequest& request, types::RequestTypes
         sendRequest(request, i, type);
       }
   }
+
+  fflush(stdout);
 }
 
 void PbftServerImpl::sendPrePrepareToAll(PrePrepareRequest& request) {
-  std::string dataString;
-  Request* r = request.mutable_r();
-  r->data().SerializeToString(&dataString);
-  addMACSignature(dataString, r->mutable_sig_vec());
-
+  printf("pre prepare request %s\n", request.DebugString().c_str());
   for (int i = 0; i < clusterSize; i++) {
       if (i != serverId) {
           ResponseData* call = new ResponseData(this, responseCQ.get());
-          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(serverId);
+          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(i);
           std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
           call->sendPrePrepare(request, stub_, deadline);      
       }
@@ -212,7 +218,7 @@ void PbftServerImpl::sendViewChangeToAll(ViewChangeReq& request) {
           addECDSASignature(dataString, request.mutable_signature());
 
           ResponseData* call = new ResponseData(this, responseCQ.get());
-          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(serverId);
+          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(i);
           std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
           call->sendViewChange(request, stub_, deadline);      
       }
@@ -230,7 +236,7 @@ void PbftServerImpl::sendNewViewToAll(NewViewReq& request) {
       if (i != serverId) {
 
           ResponseData* call = new ResponseData(this, responseCQ.get());
-          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(serverId);
+          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(i);
           std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
           call->sendNewView(request, stub_, deadline);      
       }
@@ -247,7 +253,7 @@ void PbftServerImpl::sendCheckpointToAll(CheckpointReq& request) {
   for (int i = 0; i < clusterSize; i++) {
       if (i != serverId) {
           ResponseData* call = new ResponseData(this, responseCQ.get());
-          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(serverId);
+          std::unique_ptr<PbftServer::Stub>& stub_ = serverStubs_.at(i);
           std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
           call->sendCheckpoint(request, stub_, deadline);      
       }
@@ -269,14 +275,16 @@ void PbftServerImpl::sendSync(SyncReq& request, int senderId, int receiverId) {
 
 void PbftServerImpl::addMACSignature(std::string data, int receiverId, Signature* signature) {
   std::string binPath = Utils::macKeyPath(serverId, receiverId);
-  signature->set_sig(crypto::signMAC(data, binPath));
+  std::string mac = crypto::signMAC(data, binPath);
+  signature->set_sig(mac);
   signature->set_server_id(serverId);
 }
 
 void PbftServerImpl::addMACSignature(std::string data, SignatureVec* sigVec) {
   for (int i = 0; i < clusterSize; i++) {
     std::string binPath = Utils::macKeyPath(serverId, i);
-    sigVec->add_signatures(crypto::signMAC(data, binPath));
+    std::string mac = crypto::signMAC(data, binPath);
+    sigVec->add_signatures(mac);
   }
 
   sigVec->set_server_id(serverId);
@@ -284,7 +292,10 @@ void PbftServerImpl::addMACSignature(std::string data, SignatureVec* sigVec) {
 
 void PbftServerImpl::addECDSASignature(std::string data, Signature* signature) {
   std::string pemPath = Utils::serverPrECDSAKeyPath(serverId);
-  signature->set_sig(crypto::signECDSA(data, pemPath));
+  std::string ecdsa = crypto::signECDSA(data, pemPath);
+
+  printf("[addECDSA] setting signature fields\n");
+  signature->set_sig(ecdsa);
   signature->set_server_id(serverId);
 }
 
@@ -331,9 +342,10 @@ bool PbftServerImpl::verifySignature(const SyncReq& request) {
 }
 
 void PbftServerImpl::processTransfer(Message& message) {
-  std::cout << serverName << " got transfer request" << std::endl;
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
+
+  printf("Transfer %s, %s, %d\n", message.data().sender().c_str(), message.data().receiver().c_str(), message.data().amount());
 
   // Compute message digest
   std::string dataString;
@@ -342,9 +354,14 @@ void PbftServerImpl::processTransfer(Message& message) {
   std::string messageDigest = crypto::sha256Digest(dataString);
 
   // Verify the client's signature
-  if (!verifySignature(message)) return;
+  if (!verifySignature(message)) {
+    printf("[Transfer] client signature invalid\n");
+    return;
+  }
 
+  printf("Transfer signature verified\n");
   MessageInfo* entry = digestToEntry.find(messageDigest) == digestToEntry.end() ? nullptr : digestToEntry[messageDigest];
+  printf("Message digest %s\n", messageDigest.c_str());
 
   // Process request
   if (serverId != getLeaderId()) {
@@ -353,6 +370,8 @@ void PbftServerImpl::processTransfer(Message& message) {
       notifyClient(message.signature().server_id(), message, entry->result);
       return;
     }
+
+    printf("Forwarding call to leader\n");
 
     // Forward the request to leader  
     // If the request is the result of a retry attempt by client, the node will wait for the leader to broadcast pre-prepares
@@ -379,6 +398,9 @@ void PbftServerImpl::processTransfer(Message& message) {
   context->set_sequence_num(currentSequence);    
   context->set_digest(messageDigest);
   
+  r->data().SerializeToString(&dataString);
+  addMACSignature(dataString, r->mutable_sig_vec());
+
   Message* m = prePrepareReq.mutable_m();
   m->CopyFrom(message);
 
@@ -387,11 +409,14 @@ void PbftServerImpl::processTransfer(Message& message) {
   entry = new MessageInfo();
   entry->m.CopyFrom(message);
   entry->mstatus = types::PRE_PREPARED;
-  entry->prePrepare.CopyFrom(prePrepareReq);
+  entry->prePrepare.CopyFrom(prePrepareReq.r());
   entry->prepareProofs.clear();
   entry->commitProofs.clear();
   log[index] = entry;
   digestToEntry[messageDigest] = entry;
+  printf("Added entry at index %d\n", index);
+
+  printf("Sending transfer to other replicas\n");
 
   // broadcast pre-prepare request and the original client message
   sendPrePrepareToAll(prePrepareReq);
@@ -401,12 +426,16 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
 
+  printf("Preprepare received\n");
+
   // Ignore request if not from leader
   if (request.r().sig_vec().server_id() != getLeaderId()) return;
 
   // Verify MAC signature
   bool validSignature = verifySignature(request.m());
   if (!validSignature) return;
+
+  printf("PrePrepare Request verified\n");
   
   // Check request validity
   int viewNum = request.r().data().view_num();
@@ -422,6 +451,8 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   
   int index = seqNum - lowWatermark;
 
+  printf("[PrePrepare] index %d\n", index);
+
   // Another entry with same view number and seq number already present
   if (log[index] != nullptr && 
       (viewNum <= log[index]->prePrepare.data().view_num() 
@@ -433,10 +464,13 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   // Update log entry metadata
   log[index]->m.CopyFrom(request.m());
   log[index]->mstatus = types::PRE_PREPARED;
-  log[index]->prePrepare.CopyFrom(request);
+  log[index]->prePrepare.CopyFrom(request.r());
   log[index]->prepareProofs.clear();
   log[index]->commitProofs.clear();
   digestToEntry[digest] = log[index];
+  currentSequence = index;
+
+  printf("[PrePrepare] inserted entry at %d\n", index);
 
   // Compose pre-prepare-ok
   Request prePrepareOk;
@@ -446,7 +480,11 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
   log[index]->prepareProofs[serverId] = prePrepareOk;
 
   // send pre-prepare-ok
+  printf("[PrePrepare] Sending Prepared\n");
   sendRequest(prePrepareOk, request.r().sig_vec().server_id(), types::PRE_PREPARE_OK);
+  printf("[PrePrepare] Sent Prepared\n");
+
+  printf("[PrePrepare] %s\n", prePrepareOk.DebugString().c_str());
 
   // set a view change timer for this request
   setViewChangeTimer(false, currentView + 1, viewChangeTimeoutDelta, digest);
@@ -454,14 +492,23 @@ void PbftServerImpl::processPrePrepare(PrePrepareRequest& request) {
 
 void PbftServerImpl::processPrePrepareOk(Request& request) {
   // Ignore if view change is in progress
-  if (state_ == VIEW_CHANGE) return;
+  if (state_ == VIEW_CHANGE) {
+    printf("[pp ok] in view change. ignore\n");
+    return;
+  }
 
   // Ignore request if not intended for leader
-  if (serverId != getLeaderId()) return;
+  if (serverId != getLeaderId()) {
+    printf("[pp ok] not the leader. ignore\n");
+    return;
+  }
 
   // Verify MAC signature
   bool validSignature = verifySignature(request);
-  if (!validSignature) return;
+  if (!validSignature) {
+    printf("[pp ok] invalid signature\n");
+    return;
+  }
 
   // Check request validity
   int seqNum = request.data().sequence_num();
@@ -482,8 +529,17 @@ void PbftServerImpl::processPrePrepareOk(Request& request) {
 }
 
 void PbftServerImpl::processPrepare(ProofRequest& request) {
+
+  std::cout << "Prepare received " << request.DebugString() << std::endl;
+
+  printf("Prepare req %s\n", request.DebugString().c_str());
   // Ignore if view change is in progress
-  if (state_ == VIEW_CHANGE || isByzantine) return;
+  if (state_ == VIEW_CHANGE || isByzantine) {
+    printf("[prepare] in view change. ignore\n");
+    return;
+  }
+
+  printf("%s", request.DebugString().c_str());
 
   // Check request validity
   int viewNum = request.data().view_num();
@@ -494,55 +550,82 @@ void PbftServerImpl::processPrepare(ProofRequest& request) {
   if (seqNum < lowWatermark || seqNum > highWatermark) return;
   
   int index = seqNum - lowWatermark;
+  printf("[Prepare] request for index %d\n", index);
 
   // Ignore if not pre-prepared
-  if (log[index] == nullptr || log[index]->mstatus != types::PRE_PREPARED) return;
+  if (log[index] == nullptr || log[index]->mstatus != types::PRE_PREPARED) {
+    printf("not pre-prepared. ignore\n");
+    return;
+  }
 
   // Check for valid matching prepares and update log entry metadata
   std::string dataString;
   const Context& data = request.data();
   data.SerializeToString(&dataString);
 
+  printf("log[index]: %d %s\n", log[index]->prePrepare.data().view_num(), log[index]->prePrepare.data().digest().c_str());
   for (int i = 0; i < request.sig_vecs_size(); i++) {
     int senderId = request.sig_vecs(i).server_id();
     std::string binPath = Utils::macKeyPath(serverId, senderId);
     bool validSignature = senderId == serverId ? true : crypto::verifyMAC(dataString, request.sig_vecs(i).signatures(serverId), binPath);
+    std::cout << "valid signature " << validSignature << std::endl;
     
     if (validSignature 
             && viewNum == log[index]->prePrepare.data().view_num()
             && digest == log[index]->prePrepare.data().digest()) {
         
         Request r;
+        printf("[prepare] sign %d valid\n", i);
         r.mutable_data()->CopyFrom(request.data());
         r.mutable_sig_vec()->CopyFrom(request.sig_vecs(i));
         log[index]->prepareProofs[senderId] = r;
     }
   }
 
+  for (auto pair: log[index]->prepareProofs) {
+    printf("Prepare proofs %d\n%s\n", pair.first, pair.second.DebugString().c_str());
+  }
+
+
+  printf("prepare proofs size %ld\n", log[index]->prepareProofs.size());
   // Check if 2f valid prepares
   if (!isByzantine && log[index]->prepareProofs.size() == 2 * f) {
       // Update log entry metadata
       log[index]->mstatus = types::PREPARED;
 
+      printf("[Prepare] Sending prepare ok for index %d\n", index);
       // Compose commit request
       Request commitReq;
       commitReq.mutable_data()->CopyFrom(request.data());
 
       // Send commit request
-      sendRequest(commitReq, getLeaderId(), types::COMMIT);
+      sendRequest(commitReq, getLeaderId(), types::PREPARE_OK);
   }
+
+  printf("2f valid signatures not found. ignore prepare\n");
 }
 
 void PbftServerImpl::processPrepareOk(Request& request) {
+
+  printf("[PrepareOk] received from %d\n", request.sig_vec().server_id());
+
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
 
   // Ignore request if not intended for leader
-  if (serverId != getLeaderId()) return;
+  if (serverId != getLeaderId()) {
+    printf("[PrepareOk] not leader. ignoring\n");
+    return;
+  }
 
   // Verify MAC signature
   bool validSignature = verifySignature(request);
-  if (!validSignature) return;
+  if (!validSignature) {
+    printf("[PrepareOk] replica signature verified\n");
+    return;
+  }
+
+  printf("[PrepareOk] Ok from %d\n", request.sig_vec().server_id());
 
   // Check request validity
   int seqNum = request.data().sequence_num();
@@ -550,11 +633,12 @@ void PbftServerImpl::processPrepareOk(Request& request) {
   
   if (log[index]->prePrepare.data().digest() != request.data().digest()) return;
 
-  // Append prepare ok to commit proofs
+  // Append own prepare ok to commit proofs
   log[index]->commitProofs[request.sig_vec().server_id()] = request;
   
   // Check if 2f + 1 matching acks. If yes, broadcast commit
   if (log[index]->commitProofs.size() == 2 * f + 1) {
+    printf("[PrepareOk] sending commit to all replicas for index %d\n", index);
     log[index]->mstatus = types::COMMITTED;
     ProofRequest commit;
     commit.mutable_data()->CopyFrom(log[index]->prePrepare.data());
@@ -565,11 +649,13 @@ void PbftServerImpl::processPrepareOk(Request& request) {
       vec->CopyFrom(pair.second.sig_vec());
     }
 
+    executePending(index);
     sendRequestToAll(commit, types::COMMIT);
   }
 }
 
 void PbftServerImpl::processCommit(ProofRequest& request) {
+
   // Ignore if view change is in progress
   if (state_ == VIEW_CHANGE) return;
 
@@ -582,6 +668,7 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
   if (seqNum < lowWatermark || seqNum > highWatermark) return;
   
   int index = seqNum - lowWatermark;
+  printf("[commit] received request for index %d\n", index);
 
   // Ignore if not pre-prepared
   if (log[index] == nullptr || !(log[index]->mstatus != types::PRE_PREPARED || log[index]->mstatus != types::PREPARED)) return;
@@ -608,14 +695,16 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
   }
 
   // Check if 2f + 1 valid commits
-  if (log[index]->commitProofs.size() == 2 * f + 1) {
+  if (log[index]->commitProofs.size() >= 2 * f + 1) {
       // Update log entry metadata
+      printf("Committed at index %d\n", index);
       log[index]->mstatus = types::COMMITTED;
       executePending(index);
   }
 }
 
 void PbftServerImpl::processViewChange(ViewChangeReq& request) {
+
   if (!verifyViewChange(request)) return;
   
   // Check request validity
@@ -915,9 +1004,11 @@ void PbftServerImpl::composeViewChangeRequest(int viewNum, ViewChangeReq& reques
 
   // For every seq number > s, if the entry is prepared, attach its valid pre-prepare and 2f matching prepares
   int checkpointOffset = lastStableCheckpointSeqNum - lowWatermark;
+  printf("Checkpoint offset %d\n", checkpointOffset);
   for (int i = checkpointOffset + 1; i < k; i++) {
     // If log entry is prepared, attach its proof
-    if (log[i]->mstatus == types::PREPARED || log[i]->mstatus == types::COMMITTED || log[i]->mstatus == types::EXECUTED) {
+    // printf("size of log %d, i %d\n", log.size(), i);
+    if (log[i] != nullptr && (log[i]->mstatus == types::PREPARED || log[i]->mstatus == types::COMMITTED || log[i]->mstatus == types::EXECUTED)) {
         PrepareProof* pproof = data->add_pproofs();
         pproof->mutable_pre_prepare()->CopyFrom(log[i]->prePrepare);
 
@@ -930,6 +1021,8 @@ void PbftServerImpl::composeViewChangeRequest(int viewNum, ViewChangeReq& reques
 }
 
 void PbftServerImpl::triggerViewChange(int viewNum) {
+
+  return;
   state_ = VIEW_CHANGE;
 
   ViewChangeReq request;
@@ -947,7 +1040,9 @@ void PbftServerImpl::setViewChangeTimer(bool consecutiveViewChange, int newView,
   std::future<void> f = std::async(std::launch::async, [this, consecutiveViewChange, newView, digest, timeoutSeconds] () {
     std::this_thread::sleep_for(std::chrono::seconds(timeoutSeconds));
 
+    printf("View change timer expired\n");
     if (consecutiveViewChange && state_ == VIEW_CHANGE) {
+      printf("Triggering consecutive view change.\n");
       triggerViewChange(newView);
 
     } else if (!consecutiveViewChange && state_ == NORMAL) {
@@ -960,9 +1055,11 @@ void PbftServerImpl::setViewChangeTimer(bool consecutiveViewChange, int newView,
       if (digestToEntry.find(digest) == digestToEntry.end() 
                 || digestToEntry[digest]->mstatus != types::EXECUTED) {
         // Trigger view change
+        printf("Triggering view change. Timer expired\n");
         triggerViewChange(newView);
       }
     }
+    printf("Not triggering view change\n");
   });
 
   // Store the variable to prevent it from going out-of-scope which causes blocking
@@ -970,26 +1067,35 @@ void PbftServerImpl::setViewChangeTimer(bool consecutiveViewChange, int newView,
 }
 
 void PbftServerImpl::setOptimisticTimer(int index) {
+  std::cout << "setting optimistic time " << std::endl;
   std::future<void> f = std::async(std::launch::async, [this, index] () {
     std::this_thread::sleep_for(std::chrono::seconds(optimisticTimeoutSeconds));
 
     // In View Change state. Ignore.
-    if (state_ == VIEW_CHANGE) return;
+    if (state_ == VIEW_CHANGE) {
+      std::cout << "optimistic timer expired" << std::endl;
+      return;
+    }
 
     ProofRequest request;
     request.mutable_data()->CopyFrom(log[index]->prePrepare.data());
 
-    // Attack prepare proofs
+    std::cout << "index " << index << " prepare proofs size " << log[index]->prepareProofs.size() << std::endl;
+
+    // Attach prepare proofs
     for (auto& pair: log[index]->prepareProofs) {
       SignatureVec* vec = request.add_sig_vecs();
       vec->CopyFrom(pair.second.sig_vec());
     }
 
+  
+
     if (log[index]->prepareProofs.size() == 3 * this->f) {
+      printf("[optiTimer] Sending out commit for index %d\n", index);
+
       // Directly broadcast out a commit request
       log[index]->mstatus = types::COMMITTED;
       log[index]->commitProofs = log[index]->prepareProofs;
-      
       // Add leader's own commit proof
       Request r;
       r.mutable_data()->CopyFrom(log[index]->prePrepare.data());
@@ -997,14 +1103,28 @@ void PbftServerImpl::setOptimisticTimer(int index) {
       log[index]->prePrepare.data().SerializeToString(&dataString);
       addMACSignature(dataString, r.mutable_sig_vec());
       log[index]->commitProofs[serverId] = r;
-      request.add_sig_vecs()->CopyFrom(r.sig_vec());
 
+      request.add_sig_vecs()->CopyFrom(r.sig_vec());
+      
       sendRequestToAll(request, types::COMMIT);
+      fflush(stdout);
       executePending(index);
 
     } else {
+      printf("[optiTimer] Sending out prepare for index %d. proofs len %ld\n", index, log[index]->prepareProofs.size());
+
+      // Add leader's own commit proof
+      Request r;
+      r.mutable_data()->CopyFrom(log[index]->prePrepare.data());
+      std::string dataString;
+      log[index]->prePrepare.data().SerializeToString(&dataString);
+      addMACSignature(dataString, r.mutable_sig_vec());
+      log[index]->commitProofs[serverId] = r;
+
+      std::cout << "Prepare sending " << request.DebugString() << std::endl;
       // Broadcast a prepare request
       sendRequestToAll(request, types::PREPARE);
+      fflush(stdout);
     }
 
   });
@@ -1028,8 +1148,13 @@ void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSec
 
 
 void PbftServerImpl::executePending(int lastCommitted) {
-  for (int i = lastExecuted + 1; i <= lastCommitted; i++) {
-    if (log[i]->mstatus == types::COMMITTED) {
+  int i = lastExecuted + 1;
+  while (i <= highWatermark) {
+    if (log[i] == nullptr) {
+      i += 1;
+      continue;
+    }
+    else if (log[i]->mstatus == types::COMMITTED) {
       std::string sender = log[i]->m.data().sender();
       std::string receiver = log[i]->m.data().receiver();
       int amount = log[i]->m.data().amount();
@@ -1050,6 +1175,7 @@ void PbftServerImpl::executePending(int lastCommitted) {
         checkpoint();
       }
 
+      i += 1;
     } else {
       break;
     }
@@ -1085,25 +1211,43 @@ void PbftServerImpl::checkpoint() {
 }
 
 void PbftServerImpl::notifyClient(int clientId, Message& m, bool res) {
+  printf("[notify] notify begin\n");
   Response reply;
   pbft::ResponseData* replyData = reply.mutable_data();
   replyData->mutable_tdata()->CopyFrom(m.data());
   replyData->set_ack(res);
   replyData->set_view_num(currentView);
 
+  printf("[notify] signing request\n");
+
+  // TODO: problematic code. throws segmentation fault
   std::string replyDataString;
   replyData->SerializeToString(&replyDataString);
   addECDSASignature(replyDataString, reply.mutable_signature());
+  
+  std::cout << m.DebugString() << std::endl;
+  std::cout << clientId << std::endl;
+  // printf("[notify] notify client of %s %s %d %s\n", m.data().sender().c_str(), m.data().receiver().c_str(), m.data().amount(), res);
+  // std::cout << std::endl;
 
   ResponseData *call = new ResponseData(this, responseCQ.get());
+  printf("[notify] sending notify to client id %d\n", clientId);
   std::unique_ptr<PbftClient::Stub>& stub_ = clientStubs_[clientId];
   std::chrono::time_point deadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
   call->sendNotify(reply, stub_, deadline);
 }
 
 void PbftServerImpl::GetLog(GetLogRes& reply) {
-  for (int i = 0; i < currentSequence; i++) {
+  printf("[GetLog] log size %ld, cur seq num %d\n", log.size(), currentSequence);
+  for (int i = 0; i <= currentSequence; i++) {
     LogEntry* e = reply.add_entries();
+
+    if (log[i] == nullptr) {
+      printf("Entry %d is null\n", i);
+      continue;
+    } 
+
+    printf("[%d] %s %s %d\n", i, log[i]->m.data().sender().c_str(), log[i]->m.data().receiver().c_str(), log[i]->m.data().amount());
     TransactionData* tdata = e->mutable_t();
     tdata->CopyFrom(log[i]->m.data());
     e->set_matching_prepares(log[i]->prepareProofs.size());
@@ -1112,6 +1256,7 @@ void PbftServerImpl::GetLog(GetLogRes& reply) {
 }
 
 void PbftServerImpl::GetDB(GetDBRes& reply) {
+  std::cout << "GetDb received" << std::endl;
   for (int i = 0; i < Constants::clientAddresses.size(); i++) {
     std::string client = std::string(1, 'A' + i);
     reply.add_balances(balances[client]);
@@ -1123,23 +1268,28 @@ void PbftServerImpl::GetStatus(GetStatusReq& request, GetStatusRes& reply) {
   int index = seqNum - lowWatermark;
 
   std::string status;
-  switch (log[index]->mstatus) {
-    case types::NO_STATUS:
-      status = "NS";
-      break;
-    case types::PRE_PREPARED:
-      status = "PP";
-      break;
-    case types::PREPARED:
-      status = "P";
-      break;
-    case types::COMMITTED:
-      status = "C";
-      break;
-    case types::EXECUTED:
-      status = "E";
-      break;
+  if (index < 0 || index > k || log[index] == nullptr) {
+    status = "NS";
+  } else {
+    switch (log[index]->mstatus) {
+      case types::NO_STATUS:
+        status = "NS";
+        break;
+      case types::PRE_PREPARED:
+        status = "PP";
+        break;
+      case types::PREPARED:
+        status = "P";
+        break;
+      case types::COMMITTED:
+        status = "C";
+        break;
+      case types::EXECUTED:
+        status = "E";
+        break;
+    }
   }
+
   reply.set_status(status);
 }
 

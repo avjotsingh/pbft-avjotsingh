@@ -161,6 +161,7 @@ private:
                             status_ = FINISH;
                             break;
                         case types::PREPARE_OK:
+                            std::cout << "process pre prepare ok" << std::endl;
                             server_->processPrepareOk(prepareOkReq);
                             responder.Finish(reply, Status::OK, this);
                             status_ = FINISH;
@@ -346,6 +347,9 @@ private:
             }
 
             void HandleRPCResponse() {
+                // if (!status.ok()) {
+                //     std::cout << "RPC failed" << std::endl;
+                // }
                 delete this;
             }
             

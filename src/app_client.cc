@@ -75,7 +75,7 @@ void AppClient::GetLogs(std::string serverName, std::vector<types::PbftLogEntry>
 
 void AppClient::GetDb(std::vector<std::vector<std::string>>& db, std::vector<std::string>& aliveServers) {
     ClientContext context;
-    for (int i = 0; i < Constants::serverNames.size(); i++) {
+    for (int i = 0; i < 1; i++) {//{Constants::serverNames.size(); i++) {
         Empty request;
         GetDBRes reply;
         std::vector<std::string> balances = std::vector<std::string>();
@@ -86,6 +86,7 @@ void AppClient::GetDb(std::vector<std::vector<std::string>>& db, std::vector<std
             }
         } else {
             Status status = serverStubs_[i]->GetDb(&context, request, &reply);
+            std::cout << reply.DebugString() << std::endl;
             for (int j = 0; j < Constants::clientAddresses.size(); j++) {
                 balances.push_back(std::to_string(reply.balances(j)));
             }

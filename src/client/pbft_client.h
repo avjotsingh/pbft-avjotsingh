@@ -150,7 +150,7 @@ private:
     void processNotify(Response& request);
     void processProcess(Transactions& request);
     void transferBroadcast();
-    void setTransferTimer(TransferInfo& info, int transferTimeoutSeconds);
+    void setTransferTimer(TransferInfo* info, int transferTimeoutSeconds);
 
     PbftClient::AsyncService service_;
     std::unique_ptr<Server> server_;
@@ -162,7 +162,7 @@ private:
 
     std::vector<std::unique_ptr<PbftServer::Stub>> stubs_;
     std::queue<std::future<void>> transferTimers;
-    std::queue<TransferInfo> transfers;
+    std::queue<TransferInfo*> transfers;
     std::queue<types::Transaction> toProcess;
 
     int f;

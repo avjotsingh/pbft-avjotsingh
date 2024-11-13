@@ -63,7 +63,7 @@ message Context {           // Context for protocol messages
 
 message Signature {
     bytes sig = 1;
-    int32 server_id = 3;
+    int32 server_id = 2;
 }
 
 message SignatureVec {

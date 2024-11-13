@@ -26,7 +26,7 @@ PbftClientImpl::PbftClientImpl(int id, std::string name) {
     clusterSize = 7;
     
     rpcTimeoutSeconds = 2;
-    transferTimeoutSeconds = 4;
+    transferTimeoutSeconds = 60;
 
     transactionsIssued = 0;
     transactionsProcessed = 0;
@@ -85,8 +85,10 @@ void PbftClientImpl::HandleRPCs() {
             static_cast<ResponseData*>(responseTag)->HandleRPCResponse();  // Process response
         }
 
+        // printf("Transfer timers size %d\n", transferTimers.size());
         // Clean up the queue of transfer timers
         if (!transferTimers.empty()) {
+            
             std::future<void>& f = transferTimers.front();
             std::future_status status = f.wait_for(std::chrono::milliseconds(0));
             if (status == std::future_status::ready) transferTimers.pop();
@@ -102,36 +104,33 @@ void PbftClientImpl::doTransfers() {
     
     if (transfers.empty()) return;
 
-    auto tinfo = transfers.front();
-    std::string receiver = tinfo.t.receiver;
-    int amount = tinfo.t.amount;
-
-    int leaderId = getLeaderId();
-
+    TransferInfo* tinfo = transfers.front();
     Message request;
     TransactionData *tdata = request.mutable_data();
-    
-    auto epoch = std::chrono::system_clock::now().time_since_epoch();
-    long seconds = std::chrono::duration_cast<std::chrono::seconds>(epoch).count();
-    
+
     // set transaction data
-    tdata->set_sender(clientName);
-    tdata->set_receiver(receiver);
-    tdata->set_amount(amount);
-    tdata->set_timestamp(seconds);
+    tdata->set_sender(tinfo->t.sender);
+    tdata->set_receiver(tinfo->t.receiver);
+    tdata->set_amount(tinfo->t.amount);
+    tdata->set_timestamp(tinfo->timestamp);
 
     // sign the data
     Signature *sig = request.mutable_signature();
     std::string dataString;
     tdata->SerializeToString(&dataString);
     std::string pemPath = Utils::clientPrECDSAKeyPath(clientId);
+
+    std::cout << "signing message. client id: " << clientId << std::endl;
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
 
     // Start a timer for the transfer request. If f + 1 matching replies are not received by this time, then broadcast
     setTransferTimer(tinfo, transferTimeoutSeconds);
 
+    printf("Send transfer request %s %s %d\n", tinfo->t.sender.c_str(), tinfo->t.receiver.c_str(), tinfo->t.amount);
+
     // Send the request to leader for processing
+    int leaderId = getLeaderId();
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     ResponseData *call = new ResponseData(this, responseCQ.get());
     call->sendMessage(request, stubs_[leaderId], rpcDeadline);
@@ -139,15 +138,15 @@ void PbftClientImpl::doTransfers() {
 
 void PbftClientImpl::transferBroadcast() {
 
-    TransferInfo& info = transfers.front();
+    TransferInfo* info = transfers.front();
     Message request;
     TransactionData *tdata = request.mutable_data();
     
     // set transaction data
-    tdata->set_sender(info.t.sender);
-    tdata->set_receiver(info.t.receiver);
-    tdata->set_amount(info.t.amount);
-    tdata->set_timestamp(info.timestamp);
+    tdata->set_sender(info->t.sender);
+    tdata->set_receiver(info->t.receiver);
+    tdata->set_amount(info->t.amount);
+    tdata->set_timestamp(info->timestamp);
 
     // sign the data
     Signature *sig = request.mutable_signature();
@@ -156,6 +155,8 @@ void PbftClientImpl::transferBroadcast() {
     std::string pemPath = Utils::clientPrECDSAKeyPath(clientId);
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
+
+    printf("Broadcasting %s %s %d", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
 
     // Broadcast the request to all replicas
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
@@ -186,20 +187,36 @@ void PbftClientImpl::processNotify(Response& request) {
     long timestamp = request.data().tdata().timestamp();
     int viewNum = request.data().view_num();
     
+    printf("Received response for %s %s %d\n", sender.c_str(), receiver.c_str(), amount);
+
     // Update the client's current view
     currentView = std::max(currentView, viewNum);
 
     // Update the number of matching replies
-    TransferInfo info = transfers.front();
-    if (info.timestamp == timestamp) {
-        request.data().ack() ? info.successes.insert(replicaId) : info.failures.insert(replicaId);
-        if (info.successes.size() >= f + 1 || info.failures.size() >= f + 1) {
+    TransferInfo* info = transfers.front();
+    if (info->timestamp == timestamp) {
+        printf("[notify] updating metadata for transfer. replicaId %d\n", replicaId);
+        std::cout << request.DebugString() << std::endl;
+
+
+        if (request.data().ack()) {
+            info->successes.insert(replicaId);
+        } else {
+            info->failures.insert(replicaId);
+        }
+
+        printf("[notify] successes so far %ld, failures %ld\n", info->successes.size(), info->failures.size());
+        
+        
+        
+        if (info->successes.size() >= f + 1 || info->failures.size() >= f + 1) {
             // Got a valid response
+            printf("Received enough responses. Transfer complete. %s %s %d\n", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
             transfers.pop();
             ++transactionsProcessed;
             doTransfers();
         }
-        if (info.failures.size() >= f + 1) {
+        if (info->failures.size() >= f + 1) {
             std::cout << "Failed to process transaction (" << sender << ", " << receiver << ", " << amount << ")" << std::endl;
         }
     }
@@ -208,16 +225,24 @@ void PbftClientImpl::processNotify(Response& request) {
 void PbftClientImpl::processProcess(Transactions& transactions) {
     for (int i = 0; i < transactions.transactions_size(); i++) {
         const Transaction& t = transactions.transactions(i);
+
+        printf("client name %s\n", clientName.c_str());
+        printf("transaction %s %s %d\n", t.sender().c_str(), t.receiver().c_str(), t.amount());
+        
         if (t.sender() != clientName) continue;
 
-        TransferInfo tinfo;
-        tinfo.t.id = i;
-        tinfo.t.sender = t.sender();
-        tinfo.t.receiver = t.receiver();
-        tinfo.t.amount = t.amount();
+        auto epoch = std::chrono::system_clock::now().time_since_epoch();
+        long seconds = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
 
-        tinfo.successes = std::set<int>();
-        tinfo.failures = std::set<int>();
+        TransferInfo* tinfo = new TransferInfo();
+        tinfo->t.id = i;
+        tinfo->t.sender = t.sender();
+        tinfo->t.receiver = t.receiver();
+        tinfo->t.amount = t.amount();
+        tinfo->timestamp = seconds;
+
+        tinfo->successes = std::set<int>();
+        tinfo->failures = std::set<int>();
         
         transfers.push(tinfo);
     }
@@ -225,14 +250,20 @@ void PbftClientImpl::processProcess(Transactions& transactions) {
     doTransfers();
 }
 
-void PbftClientImpl::setTransferTimer(TransferInfo& info, int timeoutSeconds) {
+void PbftClientImpl::setTransferTimer(TransferInfo* info, int timeoutSeconds) {
     std::future<void> f = std::async(std::launch::async, [this, info, timeoutSeconds] () {
         std::this_thread::sleep_for(std::chrono::seconds(timeoutSeconds));
 
-        TransferInfo& front = transfers.front();
-        if (front.t.toString() == info.t.toString() && front.timestamp == info.timestamp) {
-            transferBroadcast();
+        if (!transfers.empty()) {
+            TransferInfo* front = transfers.front();
+            if (front->t.toString() == info->t.toString() && front->timestamp == info->timestamp) {
+                printf("Transfer timer expired. Broadcasting\n");
+                transferBroadcast();
+            } else {
+                printf("Transfer timer expired. Not Broadcasting\n");
+            }
         }
+        
     });
 
     // Store the variable to prevent it from going out-of-scope which causes blocking
