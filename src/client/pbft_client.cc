@@ -1,4 +1,5 @@
 #include <math.h>
+#include <execinfo.h>
 
 #include "pbft_client.h"
 #include "../utils/utils.h"
@@ -193,33 +194,36 @@ void PbftClientImpl::processNotify(Response& request) {
     currentView = std::max(currentView, viewNum);
 
     // Update the number of matching replies
-    TransferInfo* info = transfers.front();
-    if (info->timestamp == timestamp) {
-        printf("[notify] updating metadata for transfer. replicaId %d\n", replicaId);
-        std::cout << request.DebugString() << std::endl;
+    if (!transfers.empty()) {
+        TransferInfo* info = transfers.front();
+        if (info->timestamp == timestamp) {
+            printf("[notify] updating metadata for transfer. replicaId %d\n", replicaId);
+            std::cout << request.DebugString() << std::endl;
 
 
-        if (request.data().ack()) {
-            info->successes.insert(replicaId);
-        } else {
-            info->failures.insert(replicaId);
-        }
+            if (request.data().ack()) {
+                info->successes.insert(replicaId);
+            } else {
+                info->failures.insert(replicaId);
+            }
 
-        printf("[notify] successes so far %ld, failures %ld\n", info->successes.size(), info->failures.size());
-        
-        
-        
-        if (info->successes.size() >= f + 1 || info->failures.size() >= f + 1) {
-            // Got a valid response
-            printf("Received enough responses. Transfer complete. %s %s %d\n", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
-            transfers.pop();
-            ++transactionsProcessed;
-            doTransfers();
-        }
-        if (info->failures.size() >= f + 1) {
-            std::cout << "Failed to process transaction (" << sender << ", " << receiver << ", " << amount << ")" << std::endl;
+            printf("[notify] successes so far %ld, failures %ld\n", info->successes.size(), info->failures.size());
+            
+            
+            
+            if (info->successes.size() >= f + 1 || info->failures.size() >= f + 1) {
+                // Got a valid response
+                printf("Received enough responses. Transfer complete. %s %s %d\n", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
+                transfers.pop();
+                ++transactionsProcessed;
+                doTransfers();
+            }
+            if (info->failures.size() >= f + 1) {
+                std::cout << "Failed to process transaction (" << sender << ", " << receiver << ", " << amount << ")" << std::endl;
+            }
         }
     }
+    
 }
 
 void PbftClientImpl::processProcess(Transactions& transactions) {
@@ -275,6 +279,25 @@ void RunServer(int clientId, std::string clientName, std::string targetAddress) 
   client.run(targetAddress);
 }
 
+void printStackTrace() {
+    const int maxFrames = 10;
+    void* addrlist[maxFrames];
+
+    // Get void*'s for all entries on the stack
+    int numFrames = backtrace(addrlist, maxFrames);
+
+    // Print all the frames to stderr
+    char** symbols = backtrace_symbols(addrlist, numFrames);
+    if (symbols != nullptr) {
+        for (int i = 0; i < numFrames; ++i) {
+            std::cerr << symbols[i] << std::endl;
+        }
+        free(symbols);
+    } else {
+        std::cerr << "Failed to generate symbols for stack trace." << std::endl;
+    }
+}
+
 int main(int argc, char** argv) {
 //   absl::InitializeLog();
   if (argc < 4) {
@@ -286,6 +309,7 @@ int main(int argc, char** argv) {
     RunServer(std::stoi(argv[1]), argv[2], argv[3]);
   } catch (std::exception& e) {
     std::cerr << "Exception: " << e.what() << std::endl;
+    printStackTrace();
   }
 
 

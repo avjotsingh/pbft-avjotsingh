@@ -4,6 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include <chrono>
+#include <execinfo.h>
 
 #include "async_server.h"
 #include "../constants.h"
@@ -20,6 +21,7 @@ using pbft::LogEntry;
 using pbft::ViewChangesResEntry;
 
 
+
 // TODO sendRequest fails if some servers are down
 
 PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
@@ -28,7 +30,7 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   isByzantine = byzantine;
 
   f = 2;
-  k = 20;
+  k = 40;
 
   currentView = 1;
   currentSequence = -1;
@@ -40,7 +42,7 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   log = std::vector<MessageInfo*>(k, nullptr);
   digestToEntry = std::map<std::string, MessageInfo*>();
 
-  checkpointStepSize = 10;
+  checkpointStepSize = 20;
   lastStableCheckpointSeqNum = -1;
   lastExecuted = -1;
   state_ = NORMAL;
@@ -361,6 +363,9 @@ void PbftServerImpl::processTransfer(Message& message) {
 
   printf("Transfer signature verified\n");
   MessageInfo* entry = digestToEntry.find(messageDigest) == digestToEntry.end() ? nullptr : digestToEntry[messageDigest];
+  if (entry != nullptr) {
+    printf("Entry not found for %s\n", messageDigest.c_str());
+  }
   printf("Message digest %s\n", messageDigest.c_str());
 
   // Process request
@@ -385,7 +390,10 @@ void PbftServerImpl::processTransfer(Message& message) {
   }
 
   // Ignore the request if the protocol is already initiated for it
-  if (entry != nullptr) return;
+  if (entry != nullptr) {
+    notifyClient(message.signature().server_id(), message, entry->result);
+    return;
+  }
 
   // Increment sequence number
   ++currentSequence;
@@ -520,7 +528,7 @@ void PbftServerImpl::processPrePrepareOk(Request& request) {
   log[index]->prepareProofs[request.sig_vec().server_id()] = request;
   
   // Check if 2f matching acks. If yes, set an optimistic timer
-  if (!isByzantine && log[index]->prepareProofs.size() == 2 * f) {
+  if (!isByzantine && log[index]->mstatus == types::PRE_PREPARED && log[index]->prepareProofs.size() >= 2 * f) {
     log[index]->mstatus = types::PREPARED;
 
     // Wait to collect 3*f prepares. Then initiate either prepare or commit phase
@@ -589,7 +597,7 @@ void PbftServerImpl::processPrepare(ProofRequest& request) {
 
   printf("prepare proofs size %ld\n", log[index]->prepareProofs.size());
   // Check if 2f valid prepares
-  if (!isByzantine && log[index]->prepareProofs.size() == 2 * f) {
+  if (!isByzantine && log[index]->prepareProofs.size() >= 2 * f) {
       // Update log entry metadata
       log[index]->mstatus = types::PREPARED;
 
@@ -637,7 +645,7 @@ void PbftServerImpl::processPrepareOk(Request& request) {
   log[index]->commitProofs[request.sig_vec().server_id()] = request;
   
   // Check if 2f + 1 matching acks. If yes, broadcast commit
-  if (log[index]->commitProofs.size() == 2 * f + 1) {
+  if (log[index]->mstatus == types::PREPARED && log[index]->commitProofs.size() >= 2 * f + 1) {
     printf("[PrepareOk] sending commit to all replicas for index %d\n", index);
     log[index]->mstatus = types::COMMITTED;
     ProofRequest commit;
@@ -669,9 +677,13 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
   
   int index = seqNum - lowWatermark;
   printf("[commit] received request for index %d\n", index);
+  printf("Commit request: %s\n", request.DebugString().c_str());
 
   // Ignore if not pre-prepared
-  if (log[index] == nullptr || !(log[index]->mstatus != types::PRE_PREPARED || log[index]->mstatus != types::PREPARED)) return;
+  if (log[index] == nullptr || !(log[index]->mstatus == types::PRE_PREPARED || log[index]->mstatus == types::PREPARED)) {
+    printf("Ignoring commit for index %d\n", index);
+    return;
+  }
 
   // Check for valid matching commits and update log entry metadata
   std::string dataString;
@@ -694,8 +706,10 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
     }
   }
 
+  printf("Commit proofs size: %ld", log[index]->commitProofs.size());
+
   // Check if 2f + 1 valid commits
-  if (log[index]->commitProofs.size() >= 2 * f + 1) {
+  if (log[index]->mstatus != types::COMMITTED && log[index]->mstatus != types::EXECUTED && log[index]->commitProofs.size() >= 2 * f + 1) {
       // Update log entry metadata
       printf("Committed at index %d\n", index);
       log[index]->mstatus = types::COMMITTED;
@@ -837,7 +851,7 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
   checkpoints[checkpointedSeqNum]->checkpointProofs[request.signature().server_id()] = request;
 
   // Mark it as a stable checkpoint if enough proofs are available
-  if (checkpoints[checkpointedSeqNum]->checkpointProofs.size() == f + 1) {
+  if (checkpoints[checkpointedSeqNum]->checkpointProofs.size() >= f + 1) {
     lastStableCheckpointSeqNum = checkpointedSeqNum;
     lastStableCheckpointDigest = checkpoints[checkpointedSeqNum]->digest;
     lastStableCheckpointState = checkpoints[checkpointedSeqNum]->state;
@@ -917,7 +931,7 @@ bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
       }
     }
 
-    if (validPProofs != 2 * f) return false;
+    if (validPProofs < 2 * f) return false;
   }
 
   return true;
@@ -953,7 +967,7 @@ void PbftServerImpl::computeBigO(std::vector<ViewChangeReq>& viewChanges, std::v
         }
       }
 
-      if (validPProofs == 2 * f) {
+      if (validPProofs >= 2 * f) {
         if (megaPrePrepares.find(prePrepare.data().sequence_num()) == megaPrePrepares.end()
               || prePrepare.data().view_num() > megaPrePrepares[prePrepare.data().sequence_num()].data().view_num()) {
           megaPrePrepares[prePrepare.data().sequence_num()] = prePrepare;
@@ -1149,7 +1163,7 @@ void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSec
 
 void PbftServerImpl::executePending(int lastCommitted) {
   int i = lastExecuted + 1;
-  while (i <= highWatermark) {
+  while (i <= currentSequence) {
     if (log[i] == nullptr) {
       i += 1;
       continue;
@@ -1169,9 +1183,11 @@ void PbftServerImpl::executePending(int lastCommitted) {
 
       log[i]->result = result;
       lastExecuted = i;
+      printf("Last committed %d. Executing %d\n", lastCommitted, i);
       notifyClient(log[i]->m.signature().server_id(), log[i]->m, result);
 
       if (i % checkpointStepSize == checkpointStepSize - 1) {
+        printf("Checkpointing....\n");
         checkpoint();
       }
 
@@ -1309,6 +1325,26 @@ void RunServer(int serverId, std::string serverName, std::string serverAddress, 
   server.run(serverAddress);
 }
 
+void printStackTrace() {
+    const int maxFrames = 10;
+    void* addrlist[maxFrames];
+
+    // Get void*'s for all entries on the stack
+    int numFrames = backtrace(addrlist, maxFrames);
+
+    // Print all the frames to stderr
+    char** symbols = backtrace_symbols(addrlist, numFrames);
+    if (symbols != nullptr) {
+        for (int i = 0; i < numFrames; ++i) {
+            std::cerr << symbols[i] << std::endl;
+        }
+        free(symbols);
+    } else {
+        std::cerr << "Failed to generate symbols for stack trace." << std::endl;
+    }
+}
+
+
 int main(int argc, char** argv) {
   
   if (argc < 5) {
@@ -1320,6 +1356,7 @@ int main(int argc, char** argv) {
     RunServer(std::stoi(argv[1]), argv[2], argv[3], strcmp(argv[4], "true") == 0);
   } catch (std::exception& e) {
     std::cerr << "Exception: " << e.what() << std::endl;
+    printStackTrace();
   }
 
 
