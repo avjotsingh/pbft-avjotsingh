@@ -53,120 +53,130 @@ std::string crypto::sha256Digest(std::string& data) {
 }
 
 std::string crypto::signECDSA(const std::string& data, const std::string& pemPath) {
-
-    printf("adding empty ecdsa signature\n");
-    return "somerandomsignature";
-    
-    // Load the private key from the PEM file
-    FILE* pemFile = fopen(pemPath.c_str(), "r");
-    if (!pemFile) {
+    // Load private key from PEM file
+    FILE* fp = fopen(pemPath.c_str(), "r");
+    if (!fp) {
+        std::cerr << "Error opening PEM file\n";
         return "";
     }
 
-    EVP_PKEY* privateKey = PEM_read_PrivateKey(pemFile, nullptr, nullptr, nullptr);
-    fclose(pemFile);
-    if (!privateKey) {
+    EVP_PKEY* pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
+    fclose(fp);
+
+    if (!pkey) {
+        std::cerr << "Error reading private key\n";
         return "";
     }
 
-    // Create a context for signing
-    EVP_MD_CTX* mdCtx = EVP_MD_CTX_new();
-    if (!mdCtx) {
-        EVP_PKEY_free(privateKey);
+    // Create ECDSA signing context
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        std::cerr << "Error creating signing context\n";
+        EVP_PKEY_free(pkey);
         return "";
     }
 
-    // Initialize signing
-    if (EVP_SignInit(mdCtx, EVP_sha256()) <= 0) {
-        EVP_MD_CTX_free(mdCtx);
-        EVP_PKEY_free(privateKey);
+    if (EVP_DigestSignInit(ctx, NULL, EVP_sha256(), NULL, pkey) != 1) {
+        std::cerr << "Error initializing signing context\n";
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
         return "";
     }
 
-    // Update the context with data
-    if (EVP_SignUpdate(mdCtx, data.c_str(), data.size()) <= 0) {
-        EVP_MD_CTX_free(mdCtx);
-        EVP_PKEY_free(privateKey);
+    // Sign the data
+    if (EVP_DigestSignUpdate(ctx, data.c_str(), data.size()) != 1) {
+        std::cerr << "Error updating signing context\n";
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
         return "";
     }
 
-    // Finalize the signing
-    std::vector<unsigned char> signature(EVP_PKEY_size(privateKey));
-    unsigned int signatureLen;
-    signature.resize(EVP_PKEY_size(privateKey));
-    if (EVP_SignFinal(mdCtx, signature.data(), &signatureLen, privateKey) <= 0) {
-        EVP_MD_CTX_free(mdCtx);
-        EVP_PKEY_free(privateKey);
+    size_t siglen;
+    if (EVP_DigestSignFinal(ctx, NULL, &siglen) != 1) {
+        std::cerr << "Error getting signature length\n";
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
         return "";
     }
 
-    // Clean up
-    EVP_MD_CTX_free(mdCtx);
-    EVP_PKEY_free(privateKey);
+    unsigned char* signature = new unsigned char[siglen];
+    if (EVP_DigestSignFinal(ctx, signature, &siglen) != 1) {
+        std::cerr << "Error signing data\n";
+        delete[] signature;
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
+        return "";
+    }
 
     // Convert the signature to a hex string
     std::stringstream hexStream;
-    for (unsigned int i = 0; i < signatureLen; ++i) {
+    for (unsigned int i = 0; i < siglen; i++) {
         hexStream << std::setw(2) << std::setfill('0') << std::hex << (int)signature[i];
     }
 
-    // Return the hex string representation of the signature
+    // Cleanup
+    delete[] signature;
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+
     return hexStream.str();
 }
 
 bool crypto::verifyECDSA(const std::string& data, std::string signatureHex, const std::string& pemPath) {
-    return true;
-    
-    // Convert the signature from hex string to bytes
-
-    std::vector<unsigned char> signature;
-    for (size_t i = 0; i < signatureHex.length(); i += 2) {
-        unsigned char byte = static_cast<unsigned char>(std::stoi(signatureHex.substr(i, 2), nullptr, 16));
-        signature.push_back(byte);
-    }
-    size_t signatureLen = signature.size();
-    
-    // Load the public key from the PEM file
-    FILE* pemFile = fopen(pemPath.c_str(), "r");
-    if (!pemFile) {
+    // Load public key from PEM file
+    FILE* fp = fopen(pemPath.c_str(), "r");
+    if (!fp) {
+        std::cerr << "Error opening PEM file\n";
         return false;
     }
 
-    EVP_PKEY* publicKey = PEM_read_PUBKEY(pemFile, nullptr, nullptr, nullptr);
-    fclose(pemFile);
-    if (!publicKey) {
+    EVP_PKEY* pkey = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
+    fclose(fp);
+
+    if (!pkey) {
+        std::cerr << "Error reading public key\n";
         return false;
     }
 
-    // Create a context for verification
-    EVP_MD_CTX* mdCtx = EVP_MD_CTX_new();
-    if (!mdCtx) {
-        EVP_PKEY_free(publicKey);
+    // Create ECDSA verification context
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        std::cerr << "Error creating verification context\n";
+        EVP_PKEY_free(pkey);
         return false;
     }
 
-    // Initialize verification
-    if (EVP_VerifyInit(mdCtx, EVP_sha256()) <= 0) {
-        EVP_MD_CTX_free(mdCtx);
-        EVP_PKEY_free(publicKey);
+    if (EVP_DigestVerifyInit(ctx, NULL, EVP_sha256(), NULL, pkey) != 1) {
+        std::cerr << "Error initializing verification context\n";
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
         return false;
     }
 
-    // Update the context with data
-    if (EVP_VerifyUpdate(mdCtx, data.c_str(), data.size()) <= 0) {
-        EVP_MD_CTX_free(mdCtx);
-        EVP_PKEY_free(publicKey);
+    // Update the verification context with data
+    if (EVP_DigestVerifyUpdate(ctx, data.c_str(), data.size()) != 1) {
+        std::cerr << "Error updating verification context\n";
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
         return false;
     }
 
-    // Finalize the verification
-    int result = EVP_VerifyFinal(mdCtx, signature.data(), signatureLen, publicKey);
+    // Convert hex string signature to raw bytes
+    std::vector<unsigned char> signatureBytes;
+    for (size_t i = 0; i < signatureHex.size(); i += 2) {
+        std::string byteString = signatureHex.substr(i, 2);
+        unsigned char byte = (unsigned char)strtol(byteString.c_str(), NULL, 16);
+        signatureBytes.push_back(byte);
+    }
 
-    // Clean up
-    EVP_MD_CTX_free(mdCtx);
-    EVP_PKEY_free(publicKey);
+    // Verify the signature
+    bool isValid = EVP_DigestVerifyFinal(ctx, signatureBytes.data(), signatureBytes.size()) == 1;
 
-    return result == 1; // Returns 1 if the signature is valid
+    // Cleanup
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+
+    return isValid;
 }
 
 std::string crypto::signMAC(const std::string& data, const std::string& binPath) {
@@ -240,7 +250,6 @@ std::string crypto::signMAC(const std::string& data, const std::string& binPath)
 
 
 bool crypto::verifyMAC(std::string &data, std::string signatureHex, const std::string& binPath) {
-    return true;
     std::string mac = signMAC(data, binPath);
     return mac == signatureHex;
 }

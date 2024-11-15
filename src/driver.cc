@@ -20,6 +20,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
     types::TransactionSet set;
     bool firstSet = true;
     std::vector<types::PbftLogEntry> logs;
+    types::ServerInfo info;
     std::vector<std::vector<std::string>> db;
     std::vector<std::string> status;
     std::string serverName;
@@ -42,14 +43,21 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     if (!reader->readNextSet(set)) {
                         std::cout << "No more transaction sets to read..." << std::endl;
                     } else {
-                        if (!firstSet) Utils::killAllServers();
-                        for (std::string& s: set.aliveServers) {
-                            Utils::startServer(s, false);
-                        }
+                        // if (!firstSet) Utils::killAllClients();
+                        // Utils::initializeClients();
 
-                        for (std::string&s : set.byzantineServers) {
-                            Utils::startServer(s, true);
-                        }
+                        // if (!firstSet) Utils::killAllServers();
+                        
+                        // for (std::string&s : set.byzantineServers) {
+                        //     // printf("byzantine %s\n", s.c_str());
+                        //     Utils::startServer(s, true);
+                        // }
+
+                        // for (std::string& s: set.aliveServers) {
+                        //     if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
+                        //         Utils::startServer(s, false);
+                        //     }
+                        // }
 
                         sleep(5);   // wait for servers to start before issuing transactions
                         client->ProcessTransactions(set.transactions);
@@ -58,32 +66,49 @@ void mainloop(CSVReader* reader, AppClient* client) {
 
                 case types::PRINT_LOG:
                     logs.clear();
-                    client->GetLogs(c.serverName, logs);
+                    client->GetLogs(c.serverName, logs, info);
                     std::cout << "Log on " << c.serverName << ": " << std::endl;
                     
-                    std::cout << std::setw(10) << "index| ";
+                    // printf("%20sindex|");
+                    std::cout << std::setw(20) << "index|";
                     for (int i = 0; i < logs.size(); i++) {
-                        std::cout << std::setw(10) << logs[i].t.id << "| ";
+                        // printf("%10s%d|", logs[i].t.id);
+                        std::cout << std::setw(10) << logs[i].t.id << "|";
                     }
                     std::cout << std::endl;
 
-                    std::cout << std::setw(10) << "transaction| ";
+                    // printf("%20stransaction|");
+                    std::cout << std::setw(20) << "transaction|";
                     for (int i = 0; i < logs.size(); i++) {
-                        std::cout << std::setw(10) << "(" << logs[i].t.sender << ", " << logs[i].t.receiver << ", " << logs[i].t.amount << "| ";
+                        // printf("%10s(%s, %s, %d)|", logs[i].t.sender.c_str(), logs[i].t.receiver.c_str(), logs[i].t.amount);
+                        std::string t = "(" + logs[i].t.sender + ", " + logs[i].t.receiver + ", " + std::to_string(logs[i].t.amount) + ")";
+                        std::cout << std::setw(10) << t << "|";
                     }
                     std::cout << std::endl;
 
-                    std::cout << std::setw(10) << "prepares| ";
+                    std::cout << std::setw(20) << "prepares|";
                     for (int i = 0; i < logs.size(); i++) {
-                        std::cout << std::setw(10) << logs[i].matchingPrepares << "| ";
+                        std::cout << std::setw(10) << logs[i].matchingPrepares << "|";
                     }
                     std::cout << std::endl;
 
-                    std::cout << std::setw(10) << "commits| ";
+                    std::cout << std::setw(20) << "commits|";
                     for (int i = 0; i < logs.size(); i++) {
-                        std::cout << std::setw(10) << logs[i].matchingCommits << "| ";
+                        std::cout << std::setw(10) << logs[i].matchingCommits << "|";
                     }
                     std::cout << std::endl;
+
+                    std::cout << std::setw(20) << "valid(Y/N)|";
+                    for (int i = 0; i < logs.size(); i++) {
+                        std::cout << std::setw(10) << (logs[i].valid ? "Y" : "N") << "|";
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << "Last committed: " << info.lastCommitted << std::endl;
+                    std::cout << "Last executed: " << info.lastExecuted << std::endl;
+                    std::cout << "Last checkpoint: " << info.lastCheckpoint << std::endl;
+                    std::cout << "Last stable checkpoint: " << info.lastStableCheckpoint << std::endl;
+
                     break;
 
                 case types::PRINT_DB:
@@ -91,17 +116,18 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     client->GetDb(db, set.aliveServers);
                     std::cout << "DB:" << std::endl;
 
-                    std::cout << std::setw(10) << "Server| ";
+                    std::cout << std::setw(11) << "Server|";
                     for (int i = 0; i < Constants::clientAddresses.size(); i++) {
-                        std::cout << 'A' + i << "| "; 
+                        std::cout << std::setw(5) << std::string(1, 'A' + i) << "|"; 
                     }
                     std::cout << std::endl;
 
                     for (int i = 0; i < Constants::serverAddresses.size(); i++) {
-                        std::cout << std::setw(10) << 'S' + i << "| ";
+                        std::cout << std::setw(10) << "S" + std::to_string(i + 1) << "|";
                         for (int j = 0; j < Constants::clientAddresses.size(); j++) {
-                            std::cout << std::setw(10) << db[i][j] << "| ";
+                            std::cout << std::setw(5) << db[i][j] << "|";
                         }
+                        std::cout << std::endl;
                     }
                     std::cout << std::endl;
                     break;
@@ -109,39 +135,40 @@ void mainloop(CSVReader* reader, AppClient* client) {
                 case types::PRINT_STATUS:
                     status.clear();
                     client->GetStatus(c.sequenceNum, status);
-                    std::cout << "Server |";
+                    std::cout << std::setw(10) << "Server" << "|";
                     for (int i = 0; i < Constants::serverAddresses.size(); i++) {
-                        std::cout << std::setw(10) << 'S' + i << "| ";
+                        std::cout << std::setw(10) << "S" + std::to_string(i + 1) << "|";
                     }
                     std::cout << std::endl;
 
+                    std::cout << std::setw(10) << "" << "|";
                     for (int i = 0; i < Constants::serverAddresses.size(); i++) {
-                        std::cout << std::setw(10) << status[i] << "| ";
+                        std::cout << std::setw(10) << status[i] << "|";
                     }
 
                     std::cout << std::endl;
                     break;
 
-                case types::PRINT_VIEW:
-                    viewChanges.clear();
-                    // pick a non-byzantine server
-                    for (auto&s : set.aliveServers) {
-                        if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
-                            serverName = s;
-                            break;
-                        }
-                    }
+                // case types::PRINT_VIEW:
+                //     viewChanges.clear();
+                //     // pick a non-byzantine server
+                //     for (auto&s : set.aliveServers) {
+                //         if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
+                //             serverName = s;
+                //             break;
+                //         }
+                //     }
 
-                    client->GetViewChanges(serverName, viewChanges);
-                    std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP";
-                    std::cout << std::endl;
-                    for (auto& v: viewChanges) {
-                        std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint;
-                        std::cout << std::endl;
-                    }
+                //     client->GetViewChanges(serverName, viewChanges);
+                //     std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP";
+                //     std::cout << std::endl;
+                //     for (auto& v: viewChanges) {
+                //         std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint;
+                //         std::cout << std::endl;
+                //     }
 
-                    std::cout << std::endl;
-                    break;
+                //     std::cout << std::endl;
+                //     break;
 
                 case types::PRINT_PERFORMANCE:
                     performance = client->GetPerformance();
@@ -177,7 +204,6 @@ int main(int argc, char **argv) {
 
     std::string filename = argv[1];
     try {
-        Utils::initializeClients();
         AppClient* client = new AppClient(); 
         CSVReader* reader = new CSVReader(filename);
         mainloop(reader, client);

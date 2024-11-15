@@ -33,6 +33,7 @@ using pbft::PbftClient;
 using pbft::Response;
 using pbft::Message;
 using pbft::Transactions;
+using pbft::GetPerformanceRes;
 
 class PbftClientImpl final {
 public:
@@ -46,13 +47,14 @@ private:
         long timestamp;
         std::set<int> successes;
         std::set<int> failures;
+        std::chrono::system_clock::time_point startTime;
     };
 
     class RequestData {
 
         public:
             RequestData(PbftClient::AsyncService* service, PbftClientImpl* server, ServerCompletionQueue* cq, types::RequestTypes type):
-                service_(service), server_(server), cq_(cq), responder(&ctx_), type_(type) {
+                service_(service), server_(server), cq_(cq), responder(&ctx_), perfResponder(&ctx_), type_(type) {
                     status_ = CREATE;
                     Proceed();
                 }
@@ -67,6 +69,10 @@ private:
                         
                         case types::PROCESS:
                             service_->RequestProcess(&ctx_, &processReq, &responder, cq_, cq_, this);
+                            break;
+
+                        case types::GET_PERFORMANCE:
+                            service_->RequestGetPerformance(&ctx_, &emptyReq, &perfResponder, cq_, cq_, this);
                             break;
 
                         default:
@@ -85,6 +91,12 @@ private:
                         case types::PROCESS:
                             server_->processProcess(processReq);
                             responder.Finish(response, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        
+                        case types::GET_PERFORMANCE:
+                            server_->processPerformance(performanceRes);
+                            perfResponder.Finish(performanceRes, Status::OK, this);
                             status_ = FINISH;
                             break;
 
@@ -106,12 +118,16 @@ private:
             ServerContext ctx_;
 
             // Different request and response types PBFT client can expect to send and receive
+            Empty emptyReq;
             Response notifyReq;
             Transactions processReq;
             Empty response;
+            GetPerformanceRes performanceRes;
 
             // The means to get back to the client.
             ServerAsyncResponseWriter<google::protobuf::Empty> responder;
+            ServerAsyncResponseWriter<GetPerformanceRes> perfResponder;
+
             
             enum RequestStatus { CREATE, PROCESS, FINISH };
             RequestStatus status_;  // The current serving state.
@@ -149,6 +165,7 @@ private:
     void HandleRPCs();
     void processNotify(Response& request);
     void processProcess(Transactions& request);
+    void processPerformance(GetPerformanceRes& reply);
     void transferBroadcast();
     void setTransferTimer(TransferInfo* info, int transferTimeoutSeconds);
 

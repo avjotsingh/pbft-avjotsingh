@@ -414,6 +414,8 @@ private:
     std::string lastStableCheckpointDigest;
     std::map<int, CheckpointInfo*> checkpoints;
     int lastExecuted;
+    int lastCommitted;
+    int lastCheckpoint;
 
 
     int rpcTimeoutSeconds;
@@ -423,7 +425,7 @@ private:
     int retryTimeoutSeconds;
 
     std::queue<std::future<void>> futures;
-    std::map<int, std::vector<ViewChangeReq>> viewChangeMessages;
+    std::map<int, std::map<int, ViewChangeReq>> viewChangeMessages;
     std::map<int, std::map<long, bool>> lastExecutedResult;
 
     enum ServerState { NORMAL, VIEW_CHANGE };

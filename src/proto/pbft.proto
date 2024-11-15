@@ -143,10 +143,16 @@ message LogEntry {
     TransactionData t = 1;
     int32 matching_prepares = 2;
     int32 matching_commits = 3;
+    bool valid = 4;
 }
 
 message GetLogRes {
     repeated LogEntry entries = 1;
+    int32 last_committed = 2;
+    int32 last_executed = 3;
+    int32 last_checkpoint = 4;
+    int32 last_stable_checkpoint = 5;
+    
 }
 
 message GetDBRes {

@@ -29,6 +29,14 @@ namespace types {
         types::Transaction t;
         int matchingPrepares;
         int matchingCommits;
+        bool valid;
+    };
+
+    struct ServerInfo {
+        int lastCommitted;
+        int lastExecuted;
+        int lastCheckpoint;
+        int lastStableCheckpoint;
     };
 
     struct ViewChangeInfo {

@@ -13,13 +13,15 @@ class AppClient {
 public:
     AppClient();
     void ProcessTransactions(std::vector<types::Transaction>& transactions);
-    void GetLogs(std::string serverName, std::vector<types::PbftLogEntry>& logs);
+    void GetLogs(std::string serverName, std::vector<types::PbftLogEntry>& logs, types::ServerInfo& info);
     void GetDb(std::vector<std::vector<std::string>>& db, std::vector<std::string>& aliveServers);
     void GetStatus(int sequenceNumber, std::vector<std::string>& status);
-    void GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges);
+    // void GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges);
     double GetPerformance();
 
 private:
     std::vector<std::unique_ptr<PbftServer::Stub>> serverStubs_;
     std::vector<std::unique_ptr<PbftClient::Stub>> clientStubs_;
+
+    int rpcTimeoutSeconds;
 };

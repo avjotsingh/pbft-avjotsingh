@@ -16,14 +16,12 @@ using pbft::Transactions;
 using pbft::Transaction;
 
 
-// TODO implement get performance
-
 PbftClientImpl::PbftClientImpl(int id, std::string name) {
     clientId = id;
     clientName = name;
 
     f = 2;
-    currentView = 0;
+    currentView = 1;
     clusterSize = 7;
     
     rpcTimeoutSeconds = 2;
@@ -61,6 +59,7 @@ void PbftClientImpl::run(std::string targetAddress) {
 void PbftClientImpl::HandleRPCs() {
     new RequestData(&service_, this, requestCQ.get(), types::NOTIFY);
     new RequestData(&service_, this, requestCQ.get(), types::PROCESS);
+    new RequestData(&service_, this, requestCQ.get(), types::GET_PERFORMANCE);
 
     void* requestTag;
     bool requestOk;
@@ -128,12 +127,17 @@ void PbftClientImpl::doTransfers() {
     // Start a timer for the transfer request. If f + 1 matching replies are not received by this time, then broadcast
     setTransferTimer(tinfo, transferTimeoutSeconds);
 
-    printf("Send transfer request %s %s %d\n", tinfo->t.sender.c_str(), tinfo->t.receiver.c_str(), tinfo->t.amount);
+    printf("=====Send transfer request %s %s %d\nDigest %s\n========", tinfo->t.sender.c_str(), tinfo->t.receiver.c_str(), tinfo->t.amount, crypto::sha256Digest(dataString).c_str());
+    printf("Transfer req: %s\n", request.DebugString().c_str());
+
 
     // Send the request to leader for processing
     int leaderId = getLeaderId();
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     ResponseData *call = new ResponseData(this, responseCQ.get());
+
+    // for performance measurement
+    tinfo->startTime = std::chrono::system_clock::now();
     call->sendMessage(request, stubs_[leaderId], rpcDeadline);
 }
 
@@ -157,18 +161,18 @@ void PbftClientImpl::transferBroadcast() {
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
 
-    printf("Broadcasting %s %s %d", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
+    printf("=======Broadcasting %s %s %d\nDigest %s\n=========", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount, crypto::sha256Digest(dataString).c_str());
 
     // Broadcast the request to all replicas
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     for (auto& stub: stubs_) {
+        printf("Sending broadcast\n");
         ResponseData *call = new ResponseData(this, responseCQ.get());
         call->sendMessage(request, stub, rpcDeadline);
     }
 
     // Start a new timer for the transfer request.
     setTransferTimer(info, transferTimeoutSeconds);
-
 }
 
 void PbftClientImpl::processNotify(Response& request) {
@@ -216,6 +220,11 @@ void PbftClientImpl::processNotify(Response& request) {
                 printf("Received enough responses. Transfer complete. %s %s %d\n", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
                 transfers.pop();
                 ++transactionsProcessed;
+
+                // Performance measurement
+                std::chrono::system_clock::time_point endTime = std::chrono::system_clock::now();
+                totalTimeTaken += std::chrono::duration_cast<std::chrono::milliseconds>(endTime - info->startTime).count();
+
                 doTransfers();
             }
             if (info->failures.size() >= f + 1) {
@@ -236,7 +245,7 @@ void PbftClientImpl::processProcess(Transactions& transactions) {
         if (t.sender() != clientName) continue;
 
         auto epoch = std::chrono::system_clock::now().time_since_epoch();
-        long seconds = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
+        long seconds = std::chrono::duration_cast<std::chrono::nanoseconds>(epoch).count();
 
         TransferInfo* tinfo = new TransferInfo();
         tinfo->t.id = i;
@@ -252,6 +261,11 @@ void PbftClientImpl::processProcess(Transactions& transactions) {
     }
 
     doTransfers();
+}
+
+void PbftClientImpl::processPerformance(GetPerformanceRes& reply) {
+    double res = 1.0; // (1000 * transactionsProcessed) / totalTimeTaken;
+    reply.set_performance(res);
 }
 
 void PbftClientImpl::setTransferTimer(TransferInfo* info, int timeoutSeconds) {
