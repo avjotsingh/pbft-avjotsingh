@@ -12,6 +12,7 @@
 
 #include "../types/request_types.h"
 #include "../types/transaction.h"
+#include "../types/types.h"
 
 using grpc::Channel;
 using grpc::Server;
@@ -47,6 +48,7 @@ using pbft::Signature;
 using pbft::SignatureVec;
 using pbft::SyncReq;
 using pbft::SyncResp;
+
 
 
 // Server Implementation
@@ -402,6 +404,7 @@ private:
     int lowWatermark;
     int highWatermark;
     std::vector<struct MessageInfo*> log;
+    // types::ThreadSafeVector<struct MessageInfo*> log;
     std::map<std::string, MessageInfo*> digestToEntry;
 
     int checkpointStepSize;

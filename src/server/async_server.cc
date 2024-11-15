@@ -23,6 +23,10 @@ using pbft::ViewChangesResEntry;
 
 
 // TODO sendRequest fails if some servers are down
+// TODO change log from vector to something else. resizing invalidates the references
+// TODO make log thread safe
+// TODO add synchronization primitives
+
 
 PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   serverId = id;
@@ -30,7 +34,7 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   isByzantine = byzantine;
 
   f = 2;
-  k = 40;
+  k = 20;
 
   currentView = 1;
   currentSequence = -1;
@@ -42,7 +46,7 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   log = std::vector<MessageInfo*>(k, nullptr);
   digestToEntry = std::map<std::string, MessageInfo*>();
 
-  checkpointStepSize = 20;
+  checkpointStepSize = 10;
   lastStableCheckpointSeqNum = -1;
   lastExecuted = -1;
   state_ = NORMAL;
@@ -532,7 +536,7 @@ void PbftServerImpl::processPrePrepareOk(Request& request) {
     log[index]->mstatus = types::PREPARED;
 
     // Wait to collect 3*f prepares. Then initiate either prepare or commit phase
-    setOptimisticTimer(index);
+    setOptimisticTimer(seqNum);
   }
 }
 
@@ -837,6 +841,7 @@ void PbftServerImpl::processNewView(const NewViewReq& request) {
 }
 
 void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
+  printf("Received checkpoint req %s\n", request.DebugString().c_str());
   // Verify the signature
   if (!verifySignature(request)) return;
 
@@ -844,14 +849,17 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
   std::string checkpointedDigest = request.data().c_digest();
 
   // Ignore if the replica/leader has not checkpointed this sequence number
-  if (checkpoints.find(checkpointedSeqNum) == checkpoints.end()) return;
-  if (checkpoints[checkpointedSeqNum]->digest != checkpointedDigest) return;
+  if (request.data().c_seq_num() <= lastStableCheckpointSeqNum) {
+    printf("Already a stable checkpoint. Ignore.\n");
+    return;
+  }
+  if (checkpoints.find(checkpointedSeqNum) != checkpoints.end() && checkpoints[checkpointedSeqNum]->digest != checkpointedDigest) return;
 
   // Accept the checkpoint request
   checkpoints[checkpointedSeqNum]->checkpointProofs[request.signature().server_id()] = request;
 
-  // Mark it as a stable checkpoint if enough proofs are available
-  if (checkpoints[checkpointedSeqNum]->checkpointProofs.size() >= f + 1) {
+  // Mark it as a stable checkpoint if enough proofs are available and node has already executed upto that point
+  if (lastExecuted >= checkpointedSeqNum && checkpoints[checkpointedSeqNum]->checkpointProofs.size() >= f + 1) {
     lastStableCheckpointSeqNum = checkpointedSeqNum;
     lastStableCheckpointDigest = checkpoints[checkpointedSeqNum]->digest;
     lastStableCheckpointState = checkpoints[checkpointedSeqNum]->state;
@@ -860,22 +868,38 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
     // Remove the checkpoint from the list of checkpoints
     checkpoints.erase(checkpointedSeqNum);
 
+    printf("Truncating the log\n");
+
+    int entriesToRemove = checkpointedSeqNum - lowWatermark + 1;
+
     // Adjust the watermarks
-    lowWatermark = lastExecuted + 1;
+    lowWatermark = checkpointedSeqNum + 1;
     highWatermark = lowWatermark + k - 1;
 
-    int entriesToRemove = lastStableCheckpointSeqNum - lowWatermark;
+
     // Clear digestToEntry
     for (int i = 0; i < entriesToRemove; i++) {
       digestToEntry.erase(log[i]->prePrepare.data().digest());
     }
 
     // Truncate the log
-    log.erase(log.begin(), log.end() + entriesToRemove);
+    log.erase(log.begin(), log.begin() + entriesToRemove);
+
+    printf("Erased log entries. Size %ld. Entries removed%d\n", log.size(), entriesToRemove);
 
     // Add empty log entries
-    std::vector<MessageInfo*> blankEntries = std::vector<MessageInfo*>(entriesToRemove);
-    log.insert(log.begin(), blankEntries.begin(), blankEntries.end());
+    std::vector<MessageInfo*> blankEntries = std::vector<MessageInfo*>(entriesToRemove, nullptr);
+    log.insert(log.end(), blankEntries.begin(), blankEntries.end());
+
+    printf("Updated log size after truncation %ld\n", log.size());
+
+    
+    for (auto &e : log) {
+      if (e != nullptr) {
+        printf("entry after checkpoint %s %s %d %d\n", e->m.data().sender().c_str(), e->m.data().receiver().c_str(), e->m.data().amount(), e->mstatus);
+      }
+    }
+    
   }
 }
 
@@ -1051,38 +1075,39 @@ void PbftServerImpl::triggerViewChange(int viewNum) {
 }
 
 void PbftServerImpl::setViewChangeTimer(bool consecutiveViewChange, int newView, int timeoutSeconds, std::string digest) {
-  std::future<void> f = std::async(std::launch::async, [this, consecutiveViewChange, newView, digest, timeoutSeconds] () {
-    std::this_thread::sleep_for(std::chrono::seconds(timeoutSeconds));
+  return;
+  // std::future<void> f = std::async(std::launch::async, [this, consecutiveViewChange, newView, digest, timeoutSeconds] () {
+  //   std::this_thread::sleep_for(std::chrono::seconds(timeoutSeconds));
 
-    printf("View change timer expired\n");
-    if (consecutiveViewChange && state_ == VIEW_CHANGE) {
-      printf("Triggering consecutive view change.\n");
-      triggerViewChange(newView);
+  //   printf("View change timer expired\n");
+  //   if (consecutiveViewChange && state_ == VIEW_CHANGE) {
+  //     printf("Triggering consecutive view change.\n");
+  //     triggerViewChange(newView);
 
-    } else if (!consecutiveViewChange && state_ == NORMAL) {
-      // View change happened already. Ignore
-      if (currentView >= newView) return;
+  //   } else if (!consecutiveViewChange && state_ == NORMAL) {
+  //     // View change happened already. Ignore
+  //     if (currentView >= newView) return;
           
-      // Cases
-      // 1. The client sent a broadcast request and the leader has not initiated the protocol
-      // 2. The leader initiated the protocol but hasn't completed it
-      if (digestToEntry.find(digest) == digestToEntry.end() 
-                || digestToEntry[digest]->mstatus != types::EXECUTED) {
-        // Trigger view change
-        printf("Triggering view change. Timer expired\n");
-        triggerViewChange(newView);
-      }
-    }
-    printf("Not triggering view change\n");
-  });
+  //     // Cases
+  //     // 1. The client sent a broadcast request and the leader has not initiated the protocol
+  //     // 2. The leader initiated the protocol but hasn't completed it
+  //     if (digestToEntry.find(digest) == digestToEntry.end() 
+  //               || digestToEntry[digest]->mstatus != types::EXECUTED) {
+  //       // Trigger view change
+  //       printf("Triggering view change. Timer expired\n");
+  //       triggerViewChange(newView);
+  //     }
+  //   }
+  //   printf("Not triggering view change\n");
+  // });
 
-  // Store the variable to prevent it from going out-of-scope which causes blocking
-  futures.push(std::move(f));
+  // // Store the variable to prevent it from going out-of-scope which causes blocking
+  // futures.push(std::move(f));
 }
 
-void PbftServerImpl::setOptimisticTimer(int index) {
-  std::cout << "setting optimistic time " << std::endl;
-  std::future<void> f = std::async(std::launch::async, [this, index] () {
+void PbftServerImpl::setOptimisticTimer(int seqNum) {
+  std::cout << "setting optimistic time for index " << seqNum << std::endl;
+  std::future<void> f = std::async(std::launch::async, [this, seqNum] () {
     std::this_thread::sleep_for(std::chrono::seconds(optimisticTimeoutSeconds));
 
     // In View Change state. Ignore.
@@ -1092,6 +1117,7 @@ void PbftServerImpl::setOptimisticTimer(int index) {
     }
 
     ProofRequest request;
+    int index = seqNum - lowWatermark;
     request.mutable_data()->CopyFrom(log[index]->prePrepare.data());
 
     std::cout << "index " << index << " prepare proofs size " << log[index]->prepareProofs.size() << std::endl;
@@ -1162,8 +1188,14 @@ void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSec
 
 
 void PbftServerImpl::executePending(int lastCommitted) {
-  int i = lastExecuted + 1;
-  while (i <= currentSequence) {
+  printf("execute pending. last committed %d\n", lastCommitted);
+  int i = lastExecuted + 1 - lowWatermark;
+  while (i <= currentSequence - lowWatermark) {
+
+    printf("execute i %d\n", i);
+    if (log[i] == nullptr) {
+      printf("log[%d] is empty\n", i);
+    }
     if (log[i] == nullptr) {
       i += 1;
       continue;
@@ -1185,11 +1217,12 @@ void PbftServerImpl::executePending(int lastCommitted) {
       lastExecuted = i;
       printf("Last committed %d. Executing %d\n", lastCommitted, i);
       notifyClient(log[i]->m.signature().server_id(), log[i]->m, result);
-
+      
+      // Checkpoint
       if (i % checkpointStepSize == checkpointStepSize - 1) {
-        printf("Checkpointing....\n");
         checkpoint();
       }
+      lastExecuted = i;
 
       i += 1;
     } else {
@@ -1224,10 +1257,12 @@ void PbftServerImpl::checkpoint() {
   cdata->set_c_seq_num(lastExecuted);
   cdata->set_c_digest(cinfo->digest);
   sendCheckpointToAll(request);
+
+  printf("Checkpointing done. Last executed %d\n", lastExecuted);
 }
 
 void PbftServerImpl::notifyClient(int clientId, Message& m, bool res) {
-  printf("[notify] notify begin\n");
+  printf("[notify] notify begin %s\n", m.DebugString().c_str());
   Response reply;
   pbft::ResponseData* replyData = reply.mutable_data();
   replyData->mutable_tdata()->CopyFrom(m.data());
