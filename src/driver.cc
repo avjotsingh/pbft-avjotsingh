@@ -161,7 +161,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
 
                     std::cout << "querying " << serverName << " for view changes" << std::endl;
                     client->GetViewChanges(serverName, viewChanges);
-                    std::cout << std::setw(20) << "View num|" << std::setw(20) << "Initiator|" << std::setw(20) << "Last st. CP";
+                    std::cout << std::setw(21) << "View num|" << std::setw(20) << "Initiator|" << std::setw(20) << "Last st. CP";
                     std::cout << std::endl;
                     for (auto& v: viewChanges) {
                         std::cout << std::setw(20) << v.viewNum << "|" << std::setw(20) << v.initiator << "|" << std::setw(20) << v.stableCheckpoint;
