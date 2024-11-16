@@ -47,7 +47,7 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
 
   rpcTimeoutSeconds = 1;
   viewChangeTimeoutSeconds = 0;
-  viewChangeTimeoutDelta = 20;
+  viewChangeTimeoutDelta = 30;
   optimisticTimeoutSeconds = 2;
   retryTimeoutSeconds = 5;
 
@@ -801,6 +801,13 @@ void PbftServerImpl::processNewView(const NewViewReq& request) {
 
   std::cout << "Entered new view " << currentView << std::endl;
 
+  // Update the view change messages correspoding to this view
+  viewChangeMessages[currentView].clear();
+  for (int i = 0; i < request.data().vproofs_size(); i++) {
+    viewChangeMessages[currentView][request.data().vproofs(i).signature().server_id()] = request.data().vproofs(i);
+  }
+  std::cout << "Updated view change messages" << std::endl;
+
   // Send out a prepare message for each of the pre prepares
   for (int i = 0; i < request.data().pre_prepares_size(); i++) {
     const Request& prePrepare = request.data().pre_prepares(i);
@@ -911,7 +918,7 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
 
 
 bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
-  std::cout << "=========verify view change " << request.DebugString() << std::endl;
+  // std::cout << "=========verify view change " << request.DebugString() << std::endl;
   // Verify MAC signature
   if (!verifySignature(request)) {
 
@@ -947,12 +954,12 @@ bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
       }
     }
 
-    std::cout << "valid pproofs" << validCProofs << std::endl;
+    // std::cout << "valid pproofs" << validCProofs << std::endl;
 
     if (request.data().last_checkpoint().c_seq_num() != -1 && validPProofs < 2 * f) return false;
   }
 
-  printf("individual view change verified=======\n");
+  // printf("individual view change verified=======\n");
   return true;
 }
 
@@ -1072,7 +1079,9 @@ void PbftServerImpl::setViewChangeTimer(std::string digest, int newView, int tim
     if (state_ == NORMAL && currentView >= newView) return;
     if (state_ == VIEW_CHANGE && lastProposedView >= newView) return;
 
-    if (!digest.empty() && awaitedDigests.find(digest) == awaitedDigests.end()) return;
+    if (!digest.empty() && (
+      awaitedDigests.find(digest) == awaitedDigests.end() || serverId == getLeaderId()
+      )) return;
     else if (!digest.empty()) {
       lastProposedView = newView;
       std::cout << "Triggering view change cz of " << digest << std::endl;
