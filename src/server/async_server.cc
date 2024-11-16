@@ -1124,6 +1124,8 @@ void PbftServerImpl::composeViewChangeRequest(int viewNum, ViewChangeReq& reques
   }
 }
 
+
+
 void PbftServerImpl::triggerViewChange(int viewNum) {
 
   if (currentView >= viewNum) return;
