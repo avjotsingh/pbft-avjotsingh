@@ -13,19 +13,19 @@ service PbftServer {
     rpc ViewChange(ViewChangeReq) returns (google.protobuf.Empty) {}
     rpc NewView(NewViewReq) returns (google.protobuf.Empty) {}
     rpc Checkpoint(CheckpointReq) returns (google.protobuf.Empty) {}
-    rpc Sync(SyncReq) returns (SyncResp) {}
+    // rpc Sync(SyncReq) returns (google.protobuf.Empty) {}
+    // rpc SyncOk(SyncResp) returns (google.protobuf.Empty) {}
 
     rpc GetLog(google.protobuf.Empty) returns (GetLogRes) {}
     rpc GetDb(google.protobuf.Empty) returns (GetDBRes) {}
     rpc GetStatus(GetStatusReq) returns (GetStatusRes) {}
     rpc GetViewChanges(google.protobuf.Empty) returns (GetViewChangesRes) {}
+    rpc GetPerformance(google.protobuf.Empty) returns (GetPerformanceRes) {}
 }
 
 service PbftClient {
     rpc Process(Transactions) returns (google.protobuf.Empty) {}
     rpc Notify(Response) returns (google.protobuf.Empty) {}
-
-    rpc GetPerformance(google.protobuf.Empty) returns (GetPerformanceRes) {}
 }
 
 
@@ -126,7 +126,7 @@ message NewViewReq {
 
 message SyncReq {
     CheckpointData data = 1;
-    Signature signature = 2;
+    SignatureVec sig_vec = 2;
 }
 
 message SyncResData {
@@ -136,7 +136,7 @@ message SyncResData {
 
 message SyncResp {
     SyncResData data = 1;
-    Signature signature = 2;
+    SignatureVec sig_vec = 2;
 }
 
 message LogEntry {

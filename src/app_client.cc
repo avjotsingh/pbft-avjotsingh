@@ -117,47 +117,48 @@ void AppClient::GetStatus(int seqNum, std::vector<std::string>& status) {
     }
 }
 
-// void AppClient::GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges) {
-//     // Pick any of the alive servers which is non-byzantine
-//     ClientContext context;
-//     Empty request;
-//     GetViewChangesRes reply;
+void AppClient::GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges) {
+    // Pick any of the alive servers which is non-byzantine
+    ClientContext context;
+    Empty request;
+    GetViewChangesRes reply;
 
-//     int serverId = serverName[1] - '1';
-//     Status status = serverStubs_[serverId]->GetViewChanges(&context, request, &reply);
-//     if (status.ok()) {
-//             for (int i = 0; i < reply.view_changes_size(); i++) {
-//             const ViewChangesResEntry& e = reply.view_changes(i);
-//             // std::vector<int> preparedEntries;
-//             // for (int j = 0; j < e.prepared_entries_size(); j++) {
-//                 // preparedEntries.push_back(e.prepared_entries(j));
-//             // }
+    int serverId = serverName[1] - '1';
+    Status status = serverStubs_[serverId]->GetViewChanges(&context, request, &reply);
+    if (status.ok()) {
+            for (int i = 0; i < reply.view_changes_size(); i++) {
+            const ViewChangesResEntry& e = reply.view_changes(i);
+            // std::vector<int> preparedEntries;
+            // for (int j = 0; j < e.prepared_entries_size(); j++) {
+                // preparedEntries.push_back(e.prepared_entries(j));
+            // }
 
-//             viewChanges.push_back({
-//                 e.view_num(),
-//                 e.stable_checkpoint(),
-//                 e.initiator()
-//                 // preparedEntries
-//             });
-//         }
-//     } else {
-//         std::cout << "GetViewChanges RPC failed" << std::endl;
-//     }
-// }
+            viewChanges.push_back({
+                e.view_num(),
+                e.stable_checkpoint(),
+                e.initiator()
+                // preparedEntries
+            });
+        }
+    } else {
+        std::cout << "GetViewChanges RPC failed" << std::endl;
+    }
+}
 
 double AppClient::GetPerformance() {
     Empty request;
     double res = 0.0;
     int count = 0;
 
-    for (int i = 0; i < clientStubs_.size(); i++) {
+    for (int i = 0; i < serverStubs_.size(); i++) {
         ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds));
         GetPerformanceRes reply;
 
-        Status s = clientStubs_[i]->GetPerformance(&context, request, &reply);
+        Status s = serverStubs_[i]->GetPerformance(&context, request, &reply);
         if (s.ok()) {
             if (reply.performance() > 0.0) {
+                std::cout << "server " << i << " reported perf " << reply.performance() << std::endl;
                 res += reply.performance();
                 count += 1;
             }

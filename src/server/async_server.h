@@ -4,7 +4,6 @@
 #include <chrono>
 #include <future>
 #include <queue>
-#include <shared_mutex>
 
 #include <grpcpp/grpcpp.h>
 #include "absl/log/check.h"
@@ -48,6 +47,7 @@ using pbft::Signature;
 using pbft::SignatureVec;
 using pbft::SyncReq;
 using pbft::SyncResp;
+using pbft::GetPerformanceRes;
 
 
 
@@ -68,7 +68,8 @@ public:
     void processViewChange(ViewChangeReq& request);
     void processNewView(const NewViewReq& request);
     void processCheckpoint(CheckpointReq& request);
-    void processSync(SyncReq& request, SyncResp& reply);
+    void processSync(SyncReq& request);
+    void processSyncOk(SyncResp& request);
 
     void processGetLog(GetLogRes& reply);
     void processGetDB(GetDBRes& reply);
@@ -81,8 +82,10 @@ private:
         public:
             RequestData(PbftServer::AsyncService* service, PbftServerImpl* server, ServerCompletionQueue* cq, types::RequestTypes type):
                 service_(service), server_(server), cq_(cq), 
-                responder(&ctx_), syncResponder(&ctx_), getLogResponder(&ctx_), getDbResponder(&ctx_), getStatusResponder(&ctx_), getViewChangesResponder(&ctx_),
-                type_(type) {
+                responder(&ctx_),
+                getLogResponder(&ctx_), getDbResponder(&ctx_), 
+                getStatusResponder(&ctx_), getViewChangesResponder(&ctx_),
+                getPerformanceResponder(&ctx_), type_(type) {
                     status_ = CREATE;
                     Proceed();
                 }
@@ -119,9 +122,12 @@ private:
                         case types::CHECKPOINT:
                             service_->RequestCheckpoint(&ctx_, &checkpointReq, &responder, cq_, cq_, this);
                             break;
-                        case types::SYNC:
-                            service_->RequestSync(&ctx_, &syncReq, &syncResponder, cq_, cq_, this);
-                            break;
+                        // case types::SYNC:
+                        //     service_->RequestSync(&ctx_, &syncReq, &responder, cq_, cq_, this);
+                        //     break;
+                        // case types::SYNC_OK:
+                        //     service_->RequestSyncOk(&ctx_, &syncResp, &responder, cq_, cq_, this);
+                        //     break;
                         case types::GET_LOG:
                             service_->RequestGetLog(&ctx_, &emptyReq, &getLogResponder, cq_, cq_, this);
                             break;
@@ -133,6 +139,9 @@ private:
                             break;
                         case types::GET_VIEW_CHANGES:
                             service_->RequestGetViewChanges(&ctx_, &emptyReq, &getViewChangesResponder, cq_, cq_, this);
+                            break;
+                        case types::GET_PERFORMANCE:
+                            service_->RequestGetPerformance(&ctx_, &emptyReq, &getPerformanceResponder, cq_, cq_, this);
                             break;
                         default:
                             break;
@@ -188,11 +197,16 @@ private:
                             responder.Finish(reply, Status::OK, this);
                             status_ = FINISH;
                             break;
-                        case types::SYNC:
-                            server_->processSync(syncReq, syncResp);
-                            syncResponder.Finish(syncResp, Status::OK, this);
-                            status_ = FINISH;
-                            break;
+                        // case types::SYNC:
+                        //     server_->processSync(syncReq, syncResp);
+                        //     responder.Finish(reply, Status::OK, this);
+                        //     status_ = FINISH;
+                        //     break;
+                        // case types::SYNC_OK:
+                        //     server_->processSyncOk(syncResp, syncResp);
+                        //     responder.Finish(reply, Status::OK, this);
+                        //     status_ = FINISH;
+                        //     break;
                         case types::GET_LOG:
                             server_->GetLog(getLogRes);
                             getLogResponder.Finish(getLogRes, Status::OK, this);
@@ -211,6 +225,11 @@ private:
                         case types::GET_VIEW_CHANGES:
                             server_->GetViewChanges(getViewChangesRes);
                             getViewChangesResponder.Finish(getViewChangesRes, Status::OK, this);
+                            status_ = FINISH;
+                            break;
+                        case types::GET_PERFORMANCE:
+                            server_->GetPerformance(getPerformanceRes);
+                            getPerformanceResponder.Finish(getPerformanceRes, Status::OK, this);
                             status_ = FINISH;
                             break;
                         default:
@@ -246,6 +265,7 @@ private:
             GetStatusReq getStatusReq;
             GetStatusRes getStatusRes;
             GetViewChangesRes getViewChangesRes;
+            GetPerformanceRes getPerformanceRes;
             Empty emptyReq;
             
             Empty reply;
@@ -253,11 +273,11 @@ private:
 
             // The means to get back to the client.
             ServerAsyncResponseWriter<Empty> responder;
-            ServerAsyncResponseWriter<SyncResp> syncResponder;
             ServerAsyncResponseWriter<GetLogRes> getLogResponder;
             ServerAsyncResponseWriter<GetDBRes> getDbResponder;
             ServerAsyncResponseWriter<GetStatusRes> getStatusResponder;
             ServerAsyncResponseWriter<GetViewChangesRes> getViewChangesResponder;
+            ServerAsyncResponseWriter<GetPerformanceRes> getPerformanceResponder;
 
             
             // Let's implement a tiny state machine with the following states.
@@ -334,12 +354,19 @@ private:
                 responseReader->Finish(&reply, &status, (void*) this);
             }
 
-            void sendSync(SyncReq& request, std::unique_ptr<PbftServer::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
-                context.set_deadline(deadline);
-                syncResponseReader = stub_->PrepareAsyncSync(&context, request, cq_);
-                responseReader->StartCall();
-                responseReader->Finish(&reply, &status, (void*) this);
-            }
+            // void sendSync(SyncReq& request, std::unique_ptr<PbftServer::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
+            //     context.set_deadline(deadline);
+            //     responseReader = stub_->PrepareAsyncSync(&context, request, cq_);
+            //     responseReader->StartCall();
+            //     responseReader->Finish(&reply, &status, (void*) this);
+            // }
+
+            // void sendSyncOk(SyncResp& request, std::unique_ptr<PbftServer::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
+            //     context.set_deadline(deadline);
+            //     responseReader = stub_->PrepareAsyncSyncOk(&context, request, cq_);
+            //     responseReader->StartCall();
+            //     responseReader->Finish(&reply, &status, (void*) this);
+            // }
 
             void sendNotify(Response& request, std::unique_ptr<PbftClient::Stub>& stub_, std::chrono::time_point<std::chrono::system_clock> deadline) {
                 context.set_deadline(deadline);
@@ -349,9 +376,6 @@ private:
             }
 
             void HandleRPCResponse() {
-                // if (!status.ok()) {
-                //     std::cout << "RPC failed" << std::endl;
-                // }
                 delete this;
             }
             
@@ -373,6 +397,7 @@ private:
         Request prePrepare;
         std::map<int, Request> prepareProofs;
         std::map<int, Request> commitProofs;
+        std::chrono::system_clock::time_point startTime;
         
         MessageInfo() {
             mstatus = types::NO_STATUS;
@@ -416,7 +441,7 @@ private:
     int lastExecuted;
     int lastCommitted;
     int lastCheckpoint;
-
+    int lastProposedView;
 
     int rpcTimeoutSeconds;
     int viewChangeTimeoutSeconds;
@@ -427,11 +452,13 @@ private:
     std::queue<std::future<void>> futures;
     std::map<int, std::map<int, ViewChangeReq>> viewChangeMessages;
     std::map<int, std::map<long, bool>> lastExecutedResult;
+    std::set<std::string> awaitedDigests;
 
     enum ServerState { NORMAL, VIEW_CHANGE };
     ServerState state_;
 
     std::map<std::string, int> balances;
+    double totalTimeTaken;
 
     int getLeaderId();
     void sendRequest(Request& request, int receiverId, types::RequestTypes type);
@@ -442,8 +469,8 @@ private:
     void sendViewChangeToAll(ViewChangeReq& request);
     void sendNewViewToAll(NewViewReq& request);
     void sendCheckpointToAll(CheckpointReq& request);
-    void sendSync(SyncReq& request, int senderId, int receiverId);
-    void sendSyncRes(SyncResp& request, int senderId, int receiverId);
+    // void sendSync(SyncReq& request, int receiverId);
+    // void sendSyncRes(SyncResp& request, int receiverId);
 
     void addMACSignature(std::string data, int receiveId, Signature* sigVec);
     void addMACSignature(std::string data, SignatureVec* sigVec);
@@ -453,17 +480,19 @@ private:
     bool verifySignature(const ViewChangeReq& request);
     bool verifySignature(const CheckpointReq& request);
     bool verifySignature(const NewViewReq& request);
-    bool verifySignature(const SyncReq& request);
+    // bool verifySignature(const SyncReq& request);
 
     bool verifyViewChange(const ViewChangeReq& request);
     void computeBigO(std::vector<ViewChangeReq>& viewChanges, std::vector<Request>& bigO, CheckpointData& lastStableCheckpoint, int& checkpointServerId);
     void composeViewChangeRequest(int viewNum, ViewChangeReq& request);
     void triggerViewChange(int viewNum);
-    void setViewChangeTimer(bool consecutiveViewChange, int newView, int timeoutSeconds, std::string digest);
+    void setViewChangeTimer(std::string digest, int newView, int timeoutSeconds);
+    void setViewChangeTimer(int index, int newView, int timeoutSeconds);
+    void setViewChangeTimer(int newView, int timeoutSeconds);
     void setOptimisticTimer(int index);
     void retryNewView(const NewViewReq& request, int retryTimeoutSeconds);
 
-    void executePending(int lastCommitted);
+    void executePending();
     void checkpoint();
     void notifyClient(int clientId, Message& m, bool res);
 
@@ -471,5 +500,6 @@ private:
     void GetDB(GetDBRes& reply);
     void GetStatus(GetStatusReq& request, GetStatusRes& reply);
     void GetViewChanges(GetViewChangesRes& reply);
+    void GetPerformance(GetPerformanceRes& reply);
 
 };

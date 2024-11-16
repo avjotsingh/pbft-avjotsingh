@@ -71,10 +71,6 @@ private:
                             service_->RequestProcess(&ctx_, &processReq, &responder, cq_, cq_, this);
                             break;
 
-                        case types::GET_PERFORMANCE:
-                            service_->RequestGetPerformance(&ctx_, &emptyReq, &perfResponder, cq_, cq_, this);
-                            break;
-
                         default:
                             break;
                     }
@@ -94,18 +90,11 @@ private:
                             status_ = FINISH;
                             break;
                         
-                        case types::GET_PERFORMANCE:
-                            server_->processPerformance(performanceRes);
-                            perfResponder.Finish(performanceRes, Status::OK, this);
-                            status_ = FINISH;
-                            break;
-
                         default:
                             status_ = FINISH;
                             break;
                     }
                 } else {
-                    std::cout << "request finished " << std::endl;
                     // CHECK_EQ(status_, FINISH);
                     delete this;
                 }

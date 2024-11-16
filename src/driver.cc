@@ -43,8 +43,8 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     if (!reader->readNextSet(set)) {
                         std::cout << "No more transaction sets to read..." << std::endl;
                     } else {
-                        // if (!firstSet) Utils::killAllClients();
-                        // Utils::initializeClients();
+                        if (!firstSet) Utils::killAllClients();
+                        Utils::initializeClients();
 
                         // if (!firstSet) Utils::killAllServers();
                         
@@ -149,26 +149,27 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     std::cout << std::endl;
                     break;
 
-                // case types::PRINT_VIEW:
-                //     viewChanges.clear();
-                //     // pick a non-byzantine server
-                //     for (auto&s : set.aliveServers) {
-                //         if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
-                //             serverName = s;
-                //             break;
-                //         }
-                //     }
+                case types::PRINT_VIEW:
+                    viewChanges.clear();
+                    // pick a non-byzantine server
+                    for (auto&s : set.aliveServers) {
+                        if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
+                            serverName = s;
+                            break;
+                        }
+                    }
 
-                //     client->GetViewChanges(serverName, viewChanges);
-                //     std::cout << std::setw(10) << "View num|" << std::setw(10) << "Initiator|" << std::setw(10) << "Last st. CP";
-                //     std::cout << std::endl;
-                //     for (auto& v: viewChanges) {
-                //         std::cout << std::setw(10) << v.viewNum << "|" << std::setw(10) << v.initiator << "|" << std::setw(10) << v.stableCheckpoint;
-                //         std::cout << std::endl;
-                //     }
+                    std::cout << "querying " << serverName << " for view changes" << std::endl;
+                    client->GetViewChanges(serverName, viewChanges);
+                    std::cout << std::setw(20) << "View num|" << std::setw(20) << "Initiator|" << std::setw(20) << "Last st. CP";
+                    std::cout << std::endl;
+                    for (auto& v: viewChanges) {
+                        std::cout << std::setw(20) << v.viewNum << "|" << std::setw(20) << v.initiator << "|" << std::setw(20) << v.stableCheckpoint;
+                        std::cout << std::endl;
+                    }
 
-                //     std::cout << std::endl;
-                //     break;
+                    std::cout << std::endl;
+                    break;
 
                 case types::PRINT_PERFORMANCE:
                     performance = client->GetPerformance();

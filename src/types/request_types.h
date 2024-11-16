@@ -14,6 +14,7 @@ namespace types {
         PROCESS,
         CHECKPOINT,
         SYNC,
+        SYNC_OK,
         GET_LOG,
         GET_DB,
         GET_STATUS,

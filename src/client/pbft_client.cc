@@ -24,8 +24,8 @@ PbftClientImpl::PbftClientImpl(int id, std::string name) {
     currentView = 1;
     clusterSize = 7;
     
-    rpcTimeoutSeconds = 2;
-    transferTimeoutSeconds = 60;
+    rpcTimeoutSeconds = 1;
+    transferTimeoutSeconds = 10;
 
     transactionsIssued = 0;
     transactionsProcessed = 0;
@@ -59,7 +59,6 @@ void PbftClientImpl::run(std::string targetAddress) {
 void PbftClientImpl::HandleRPCs() {
     new RequestData(&service_, this, requestCQ.get(), types::NOTIFY);
     new RequestData(&service_, this, requestCQ.get(), types::PROCESS);
-    new RequestData(&service_, this, requestCQ.get(), types::GET_PERFORMANCE);
 
     void* requestTag;
     bool requestOk;
@@ -264,7 +263,10 @@ void PbftClientImpl::processProcess(Transactions& transactions) {
 }
 
 void PbftClientImpl::processPerformance(GetPerformanceRes& reply) {
-    double res = 1.0; // (1000 * transactionsProcessed) / totalTimeTaken;
+    double res = 0.0;
+    if (transactionsProcessed > 0) {
+        res = (1000.0 * transactionsProcessed) / totalTimeTaken;
+    }
     reply.set_performance(res);
 }
 

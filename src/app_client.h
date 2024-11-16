@@ -16,7 +16,7 @@ public:
     void GetLogs(std::string serverName, std::vector<types::PbftLogEntry>& logs, types::ServerInfo& info);
     void GetDb(std::vector<std::vector<std::string>>& db, std::vector<std::string>& aliveServers);
     void GetStatus(int sequenceNumber, std::vector<std::string>& status);
-    // void GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges);
+    void GetViewChanges(std::string serverName, std::vector<types::ViewChangeInfo>& viewChanges);
     double GetPerformance();
 
 private:

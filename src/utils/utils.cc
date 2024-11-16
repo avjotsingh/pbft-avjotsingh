@@ -135,5 +135,5 @@ std::string Utils::macKeyPath(int serverId1, int serverId2) {
         serverId2 = temp;
     }
 
-  return "keys/servers/MAC/s" + std::to_string(serverId1) + "_s" + std::to_string(serverId2) + ".bin";
+  return "keys/server/MAC/s" + std::to_string(serverId1) + "_s" + std::to_string(serverId2) + ".bin";
 }
