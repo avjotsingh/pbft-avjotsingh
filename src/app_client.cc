@@ -158,7 +158,6 @@ double AppClient::GetPerformance() {
         Status s = serverStubs_[i]->GetPerformance(&context, request, &reply);
         if (s.ok()) {
             if (reply.performance() > 0.0) {
-                std::cout << "server " << i << " reported perf " << reply.performance() << std::endl;
                 res += reply.performance();
                 count += 1;
             }

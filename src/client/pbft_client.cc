@@ -52,7 +52,7 @@ void PbftClientImpl::run(std::string targetAddress) {
     stubs_.push_back(PbftServer::NewStub(grpc::CreateChannel(targetAddress, grpc::InsecureChannelCredentials())));    
   }
 
-  std::cout << "Client running on " << targetAddress << std::endl;
+//   std::cout << "Client running on " << targetAddress << std::endl;
   HandleRPCs();
 }
 
@@ -84,7 +84,6 @@ void PbftClientImpl::HandleRPCs() {
             static_cast<ResponseData*>(responseTag)->HandleRPCResponse();  // Process response
         }
 
-        // printf("Transfer timers size %d\n", transferTimers.size());
         // Clean up the queue of transfer timers
         if (!transferTimers.empty()) {
             
@@ -119,16 +118,11 @@ void PbftClientImpl::doTransfers() {
     tdata->SerializeToString(&dataString);
     std::string pemPath = Utils::clientPrECDSAKeyPath(clientId);
 
-    std::cout << "signing message. client id: " << clientId << std::endl;
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
 
     // Start a timer for the transfer request. If f + 1 matching replies are not received by this time, then broadcast
     setTransferTimer(tinfo, transferTimeoutSeconds);
-
-    printf("=====Send transfer request %s %s %d\nDigest %s\n========", tinfo->t.sender.c_str(), tinfo->t.receiver.c_str(), tinfo->t.amount, crypto::sha256Digest(dataString).c_str());
-    printf("Transfer req: %s\n", request.DebugString().c_str());
-
 
     // Send the request to leader for processing
     int leaderId = getLeaderId();
@@ -160,12 +154,9 @@ void PbftClientImpl::transferBroadcast() {
     sig->set_sig(crypto::signECDSA(dataString, pemPath));
     sig->set_server_id(clientId);
 
-    printf("=======Broadcasting %s %s %d\nDigest %s\n=========", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount, crypto::sha256Digest(dataString).c_str());
-
     // Broadcast the request to all replicas
     std::chrono::time_point rpcDeadline = std::chrono::system_clock::now() + std::chrono::seconds(rpcTimeoutSeconds);
     for (auto& stub: stubs_) {
-        printf("Sending broadcast\n");
         ResponseData *call = new ResponseData(this, responseCQ.get());
         call->sendMessage(request, stub, rpcDeadline);
     }
@@ -191,8 +182,6 @@ void PbftClientImpl::processNotify(Response& request) {
     long timestamp = request.data().tdata().timestamp();
     int viewNum = request.data().view_num();
     
-    printf("Received response for %s %s %d\n", sender.c_str(), receiver.c_str(), amount);
-
     // Update the client's current view
     currentView = std::max(currentView, viewNum);
 
@@ -200,23 +189,14 @@ void PbftClientImpl::processNotify(Response& request) {
     if (!transfers.empty()) {
         TransferInfo* info = transfers.front();
         if (info->timestamp == timestamp) {
-            printf("[notify] updating metadata for transfer. replicaId %d\n", replicaId);
-            std::cout << request.DebugString() << std::endl;
-
-
             if (request.data().ack()) {
                 info->successes.insert(replicaId);
             } else {
                 info->failures.insert(replicaId);
             }
 
-            printf("[notify] successes so far %ld, failures %ld\n", info->successes.size(), info->failures.size());
-            
-            
-            
             if (info->successes.size() >= f + 1 || info->failures.size() >= f + 1) {
                 // Got a valid response
-                printf("Received enough responses. Transfer complete. %s %s %d\n", info->t.sender.c_str(), info->t.receiver.c_str(), info->t.amount);
                 transfers.pop();
                 ++transactionsProcessed;
 
@@ -237,10 +217,6 @@ void PbftClientImpl::processNotify(Response& request) {
 void PbftClientImpl::processProcess(Transactions& transactions) {
     for (int i = 0; i < transactions.transactions_size(); i++) {
         const Transaction& t = transactions.transactions(i);
-
-        printf("client name %s\n", clientName.c_str());
-        printf("transaction %s %s %d\n", t.sender().c_str(), t.receiver().c_str(), t.amount());
-        
         if (t.sender() != clientName) continue;
 
         auto epoch = std::chrono::system_clock::now().time_since_epoch();
@@ -277,10 +253,7 @@ void PbftClientImpl::setTransferTimer(TransferInfo* info, int timeoutSeconds) {
         if (!transfers.empty()) {
             TransferInfo* front = transfers.front();
             if (front->t.toString() == info->t.toString() && front->timestamp == info->timestamp) {
-                printf("Transfer timer expired. Broadcasting\n");
                 transferBroadcast();
-            } else {
-                printf("Transfer timer expired. Not Broadcasting\n");
             }
         }
         

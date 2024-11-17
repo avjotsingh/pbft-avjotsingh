@@ -91,10 +91,6 @@ target_link_libraries(pbftserver
 
 add_executable(driver "src/driver.cc" "src/constants.cc" "src/app_client.cc")
 target_link_libraries(driver pbft_grpc_proto utils)
-  
-
-add_executable(test "src/test.cc" "src/constants.cc")
-target_link_libraries(test pbft_grpc_proto utils crypto)
 
 file(COPY ${CMAKE_SOURCE_DIR}/keys DESTINATION ${CMAKE_BINARY_DIR})
 

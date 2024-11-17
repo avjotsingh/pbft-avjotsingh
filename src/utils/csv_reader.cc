@@ -172,6 +172,5 @@ int CSVReader::readNextSet(types::TransactionSet& t) {
 CSVReader::~CSVReader() {
     if (this->file.is_open()) {
         this->file.close();
-        std::cout << this->filename << " closed..." << std::endl;
     }
 }

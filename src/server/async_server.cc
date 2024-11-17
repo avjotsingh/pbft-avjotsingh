@@ -46,7 +46,6 @@ PbftServerImpl::PbftServerImpl(int id, std::string name, bool byzantine) {
   state_ = NORMAL;
 
   rpcTimeoutSeconds = 1;
-  viewChangeTimeoutSeconds = 0;
   viewChangeTimeoutDelta = 30;
   optimisticTimeoutSeconds = 2;
   retryTimeoutSeconds = 5;
@@ -85,7 +84,6 @@ void PbftServerImpl::run(std::string targetAddress) {
     clientStubs_.push_back(PbftClient::NewStub(grpc::CreateChannel(targetAddress, grpc::InsecureChannelCredentials())));    
   }
 
-  std::cout << "Server running on " << targetAddress << std::endl;
   HandleRPCs();
 }
 
@@ -360,8 +358,6 @@ void PbftServerImpl::processTransfer(Message& message) {
   data.SerializeToString(&dataString);
   std::string messageDigest = crypto::sha256Digest(dataString);
 
-  // std::cout << "Transfer " << messageDigest << std::endl;
-
   // Verify the client's signature
   if (!verifySignature(message)) return;
 
@@ -391,13 +387,27 @@ void PbftServerImpl::processTransfer(Message& message) {
     notifyClient(message.signature().server_id(), message, entry->result);
     return;
   } else if (entry != nullptr) {
-    // Ignore. Protocol in progress.
-    return;
+    // Two cases
+    // 1. Protocol already initiated by current leader
+    // 2. Byzantine leader sent pre-prepare and later view change happened
+    if (entry->prePrepare.sig_vec().server_id() == getLeaderId()) {
+      return;
+    } else if (!isByzantine) {
+      entry->prepareProofs.clear();
+      entry->commitProofs.clear();
+      entry->prePrepare.mutable_data()->set_view_num(currentView);
+      entry->prePrepare.data().SerializeToString(&dataString);
+      addMACSignature(dataString, entry->prePrepare.mutable_sig_vec());
+
+      PrePrepareRequest prePrepareReq;
+      prePrepareReq.mutable_r()->CopyFrom(entry->prePrepare);
+      prePrepareReq.mutable_m()->CopyFrom(message);
+      sendPrePrepareToAll(prePrepareReq);
+      return;
+    }    
   } else {
     // Increment sequence number
     ++currentSequence;
-
-    std::cout << "Assigned sequnce " << currentSequence << " to " << messageDigest << std::endl;
 
     // Compose a pre-prepare request
     PrePrepareRequest prePrepareReq;
@@ -604,7 +614,6 @@ void PbftServerImpl::processPrepareOk(Request& request) {
   // Check if 2f + 1 matching acks. If yes, broadcast commit
   if (log[index]->mstatus == types::PREPARED && log[index]->commitProofs.size() >= 2 * f + 1) {
     log[index]->mstatus = types::COMMITTED;
-    std::cout << "Committed " << seqNum << std::endl;
     lastCommitted = std::max(seqNum, lastCommitted);
 
     ProofRequest commit;
@@ -664,7 +673,6 @@ void PbftServerImpl::processCommit(ProofRequest& request) {
   if (log[index]->mstatus != types::COMMITTED && log[index]->mstatus != types::EXECUTED && log[index]->commitProofs.size() >= 2 * f + 1) {
       // Update log entry metadata
       log[index]->mstatus = types::COMMITTED;
-      std::cout << "Committed " << seqNum << std::endl;
       lastCommitted = std::max(seqNum, lastCommitted);
       executePending();
   }
@@ -689,6 +697,7 @@ void PbftServerImpl::processViewChange(ViewChangeReq& request) {
   // Check if non-leader and f + 1 valid view change messages
   if (newView % clusterSize != serverId && viewChangeMessages[newView].size() == f + 1 && state_ != VIEW_CHANGE) {
       // Set timer for consecutive view change
+      triggerViewChange(newView);
       setViewChangeTimer(newView, 0);
       return;
   }
@@ -738,11 +747,9 @@ void PbftServerImpl::processViewChange(ViewChangeReq& request) {
 }
 
 void PbftServerImpl::processNewView(const NewViewReq& request) {
-  std::cout << "Received new view " << request.DebugString() << std::endl;
 
   // Verify the MAC signature
   if (!verifySignature(request)) {
-    std::cout << "view change sig not verified"<<std::endl;
     return;
   }
 
@@ -757,7 +764,6 @@ void PbftServerImpl::processNewView(const NewViewReq& request) {
   }
 
   if (validViewChanges < 2 * f + 1) {
-    std::cout << "not enough valid view changes " << validViewChanges << std::endl;
     return;
   }
 
@@ -772,20 +778,6 @@ void PbftServerImpl::processNewView(const NewViewReq& request) {
   }
   computeBigO(viewChanges, bigO, lastStableCheckpoint, checkpointServerId);
 
-  // // Request if sync if node is lagging
-  // if (lastStableCheckpoint.c_seq_num() > lastStableCheckpointSeqNum) {
-  //   // Compose a sync request
-  //   SyncReq syncReq;
-  //   syncReq.mutable_data()->CopyFrom(lastStableCheckpoint);
-
-  //   std::cout << "Send a sync request" << std::endl;
-
-  //   // Send a sync request
-  //   sendSync(syncReq, checkpointServerId);
-  //   retryNewView(request, retryTimeoutSeconds);
-  //   return;
-  // }
-
   // Verify the correctness of bigO sent in new view message
   for (int i = 0; i < bigO.size(); i++) {
     Request& prePrepare = bigO[i];
@@ -797,16 +789,12 @@ void PbftServerImpl::processNewView(const NewViewReq& request) {
   // Big O verified. Enter new view
   state_ = NORMAL;
   currentView = request.data().view_num();
-  viewChangeTimeoutSeconds = 0;
-
-  std::cout << "Entered new view " << currentView << std::endl;
 
   // Update the view change messages correspoding to this view
   viewChangeMessages[currentView].clear();
   for (int i = 0; i < request.data().vproofs_size(); i++) {
     viewChangeMessages[currentView][request.data().vproofs(i).signature().server_id()] = request.data().vproofs(i);
   }
-  std::cout << "Updated view change messages" << std::endl;
 
   // Send out a prepare message for each of the pre prepares
   for (int i = 0; i < request.data().pre_prepares_size(); i++) {
@@ -859,66 +847,15 @@ void PbftServerImpl::processCheckpoint(CheckpointReq& request) {
     }
 
     // Truncate the log
-    std::cout << "truncating the log. low watermark " << lowWatermark << std::endl;
     log.erase(log.begin(), log.begin() + entriesToRemove);
 
     // Add empty log entries
     std::vector<MessageInfo*> blankEntries = std::vector<MessageInfo*>(entriesToRemove, nullptr);
     log.insert(log.end(), blankEntries.begin(), blankEntries.end());
-
-    printf("After truncating\n");
-    for (int i = 0 ; i < log.size(); i++) {
-      auto e = log[i];
-      if (e != nullptr) {
-        printf("[%d] %s %s %d\n", i + lowWatermark, e->m.data().sender().c_str(), e->m.data().receiver().c_str(), e->m.data().amount());      
-      } else {
-        printf("[%d] Empty entry\n", i + lowWatermark);
-      }
-    }
   }
 }
 
-// void PbftServerImpl::processSync(SyncReq& request) {
-//   // Verify the signature
-//   if (!verifySignature(request)) return;
-
-//   std::cout << "====Process sync" << std::endl;
-
-//   // Check for request validity
-//   if (lastStableCheckpointSeqNum < request.data().c_seq_num()) return;
-
-//   SyncResp reply;
-//   SyncResData* data = reply.mutable_data();
-//   CheckpointData* cdata = data->mutable_cdata();
-//   cdata->set_c_seq_num(lastStableCheckpointSeqNum);
-//   cdata->set_c_digest(lastStableCheckpointDigest);
-
-//   for (auto& pair: balances) {
-//     (*data->mutable_balances())[pair.first] = pair.second;
-//   }
-
-//   sendSyncOk(reply, request.sig_vec().server_id());
-// }
-
-// void PbftServerImpl::processSyncOk(SyncResp& request) {
-//   // Verify the signature
-//   if (!verifySignature(request)) return;
-
-//   std::cout << "====Process sync ok" << std::endl;
-
-//   if (request.c_data().c_seq_num() <= lastStableCheckpointSeqNum) return;
-
-//   lastStableCheckpointSeqNum = request.c_data().c_digest();
-//   lastStableCheckpointDigest = request.c_data().c_digest();
-//   for(auto& pair: request.balances()) {
-//     balances[pair.first] = pair.second;
-//   }
-//   lastStableCheckpointState = balances;
-// }
-
-
 bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
-  // std::cout << "=========verify view change " << request.DebugString() << std::endl;
   // Verify MAC signature
   if (!verifySignature(request)) {
 
@@ -935,9 +872,7 @@ bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
        validCProofs++;
     }
   }
-  // std::cout << "valid cproofs" << validCProofs << std::endl;
   if (request.data().last_checkpoint().c_seq_num() != -1 && validCProofs < 2 * f + 1) {
-    std::cout << "not enough valid cproofs in individual vc req" << std::endl;
     return false;  
   }
 
@@ -954,12 +889,9 @@ bool PbftServerImpl::verifyViewChange(const ViewChangeReq& request) {
       }
     }
 
-    // std::cout << "valid pproofs" << validCProofs << std::endl;
-
     if (request.data().last_checkpoint().c_seq_num() != -1 && validPProofs < 2 * f) return false;
   }
 
-  // printf("individual view change verified=======\n");
   return true;
 }
 
@@ -967,8 +899,6 @@ void PbftServerImpl::computeBigO(std::vector<ViewChangeReq>& viewChanges, std::v
   int maxStableCheckpoint = 0;
   int maxSequenceNum = 0;
   std::map<int, Request> megaPrePrepares = std::map<int, Request>();
-
-  std::cout << "====computing big O" << std::endl;
   lastStableCheckpoint = viewChanges[0].data().last_checkpoint();
 
   for (auto& vproof: viewChanges) {
@@ -1026,7 +956,6 @@ void PbftServerImpl::computeBigO(std::vector<ViewChangeReq>& viewChanges, std::v
       bigO.push_back(prePrepare);
     }
   }
-  std::cout << "big O computed=====" << std::endl;
 }
 
 void PbftServerImpl::composeViewChangeRequest(int viewNum, ViewChangeReq& request) {
@@ -1067,6 +996,7 @@ void PbftServerImpl::triggerViewChange(int viewNum) {
   ViewChangeReq request;
   composeViewChangeRequest(viewNum, request);
 
+  lastProposedView = viewNum;
   selfTriggeredViewChangeMessages[viewNum][serverId] = request;
   
   // Broadcast the view change request
@@ -1086,7 +1016,6 @@ void PbftServerImpl::setViewChangeTimer(std::string digest, int newView, int tim
       )) return;
     else if (!digest.empty()) {
       lastProposedView = newView;
-      std::cout << "Triggering view change cz of " << digest << std::endl;
       triggerViewChange(newView);
       setViewChangeTimer(digest, newView + 1, timeoutSeconds + viewChangeTimeoutDelta);
     }
@@ -1107,7 +1036,6 @@ void PbftServerImpl::setViewChangeTimer(int seqNum, int newView, int timeoutSeco
       int index = seqNum - lowWatermark;
       if  (log[index]->mstatus != types::EXECUTED) {
         lastProposedView = newView;
-        std::cout << "Triggering view change cz of " << seqNum << std::endl;
         triggerViewChange(newView);
         setViewChangeTimer(seqNum, newView + 1, timeoutSeconds + viewChangeTimeoutDelta);
       }
@@ -1121,12 +1049,10 @@ void PbftServerImpl::setViewChangeTimer(int newView, int timeoutSeconds) {
   std::future<void> f = std::async(std::launch::async, [this, newView, timeoutSeconds] () {
     std::this_thread::sleep_for(std::chrono::seconds(timeoutSeconds));
 
-    if (state_ == NORMAL && currentView >= newView) return;
+    if (state_ == NORMAL) return;
     if (state_ == VIEW_CHANGE && lastProposedView >= newView) return;
 
     lastProposedView = newView;
-    std::cout << "Triggering view change cz of no new view. New View " << newView << std::endl;
-    triggerViewChange(newView);
     setViewChangeTimer(newView + 1, timeoutSeconds + viewChangeTimeoutDelta);
   });
 
@@ -1155,7 +1081,6 @@ void PbftServerImpl::setOptimisticTimer(int seqNum) {
 
       // Directly broadcast out a commit request
       log[index]->mstatus = types::COMMITTED;
-      std::cout << "Committed " << seqNum << std::endl;
       lastCommitted = seqNum;
 
       log[index]->commitProofs = log[index]->prepareProofs;
@@ -1196,7 +1121,6 @@ void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSec
     std::future<void> f = std::async(std::launch::async, [this, request, retryTimeoutSeconds] () {
       std::this_thread::sleep_for(std::chrono::seconds(retryTimeoutSeconds));
 
-      std::cout << "retry processing new view" << std::endl;
       if (request.data().view_num() > currentView) {
         processNewView(request);
       }
@@ -1207,13 +1131,9 @@ void PbftServerImpl::retryNewView(const NewViewReq& request, int retryTimeoutSec
 
 
 void PbftServerImpl::executePending() {
-  printf("Attempt to execute. last committed %d. last executed %d. current sequence %d. low watermark %d\n", lastCommitted, lastExecuted, currentSequence, lowWatermark);
-  // std::cout << "Attempt to execute " <<
   for (int seq = lastExecuted + 1; seq <= currentSequence; seq++) {
     int i = seq - lowWatermark;
-    // printf("execute i %d. last executed %d. low watermark %d\n", seq, lastExecuted, lowWatermark);
     if (log[i] == nullptr) {
-      std::cout << seq << " is empty. not executed" << std::endl;
       i += 1;
       continue;
     }
@@ -1234,12 +1154,9 @@ void PbftServerImpl::executePending() {
       lastExecuted = seq;
       totalTimeTaken += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - log[i]->startTime).count();
       
-      printf("Executed %d. Low watermark %d\n", seq, lowWatermark);
-      
       notifyClient(log[i]->m.signature().server_id(), log[i]->m, result);
       
       // Checkpoint
-      std::cout << "checkpoint step size " << checkpointStepSize << std::endl;
       if (seq % checkpointStepSize == checkpointStepSize - 1) {
         checkpoint();
       }
@@ -1291,7 +1208,6 @@ void PbftServerImpl::checkpoint() {
   sendCheckpointToAll(request);
 
   lastCheckpoint = lastExecuted;
-  printf("Checkpointing done. Last executed %d\n", lastExecuted);
 }
 
 void PbftServerImpl::notifyClient(int clientId, Message& m, bool res) {
@@ -1317,7 +1233,6 @@ void PbftServerImpl::GetLog(GetLogRes& reply) {
     LogEntry* e = reply.add_entries();
 
     if (log[i] == nullptr) {
-      printf("log[%d] is null. seq %d. lw. %d. log size %ld\n", i, seq, lowWatermark, log.size());
       continue;
     }
 
@@ -1326,8 +1241,6 @@ void PbftServerImpl::GetLog(GetLogRes& reply) {
     e->set_matching_prepares(log[i]->prepareProofs.size());
     e->set_matching_commits(log[i]->commitProofs.size());
     e->set_valid(log[i]->result);
-
-    std::cout << seq << " " << log[i]->m.data().sender() << " " << log[i]->m.data().receiver() << " " << log[i]->m.data().amount() << std::endl;
   }
 
   reply.set_last_committed(lastCommitted);
@@ -1348,7 +1261,9 @@ void PbftServerImpl::GetStatus(GetStatusReq& request, GetStatusRes& reply) {
   int index = seqNum - lowWatermark;
 
   std::string status;
-  if (index < 0 || index > k || log[index] == nullptr) {
+  if (seqNum <= lastExecuted) {
+    status = "E";
+  } else if (index < 0 || index > k || log[index] == nullptr) {
     status = "NS";
   } else {
     switch (log[index]->mstatus) {
@@ -1396,7 +1311,6 @@ void PbftServerImpl::GetViewChanges(GetViewChangesRes& reply) {
 void PbftServerImpl::GetPerformance(GetPerformanceRes& reply) {
   double res = 0.0;
   if (lastExecuted >= 0) {
-    std::cout << "last executed " << lastExecuted << " last committed " << lastCommitted << " time taken " << totalTimeTaken << std::endl;
     res = (1000.0 * lastExecuted) / totalTimeTaken;
   }
   reply.set_performance(res);

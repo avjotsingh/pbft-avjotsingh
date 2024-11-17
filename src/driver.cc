@@ -17,6 +17,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
     bool exit = false;
     std::string command;
     types::AppCommand c;
+    int setNo;
     types::TransactionSet set;
     bool firstSet = true;
     std::vector<types::PbftLogEntry> logs;
@@ -43,23 +44,23 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     if (!reader->readNextSet(set)) {
                         std::cout << "No more transaction sets to read..." << std::endl;
                     } else {
+                        setNo = set.setNo;
                         if (!firstSet) Utils::killAllClients();
                         Utils::initializeClients();
 
-                        // if (!firstSet) Utils::killAllServers();
+                        if (!firstSet) Utils::killAllServers();
                         
-                        // for (std::string&s : set.byzantineServers) {
-                        //     // printf("byzantine %s\n", s.c_str());
-                        //     Utils::startServer(s, true);
-                        // }
+                        for (std::string&s : set.byzantineServers) {
+                            Utils::startServer(s, true);
+                        }
 
-                        // for (std::string& s: set.aliveServers) {
-                        //     if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
-                        //         Utils::startServer(s, false);
-                        //     }
-                        // }
+                        for (std::string& s: set.aliveServers) {
+                            if (std::find(set.byzantineServers.begin(), set.byzantineServers.end(), s) == set.byzantineServers.end()) {
+                                Utils::startServer(s, false);
+                            }
+                        }
 
-                        sleep(5);   // wait for servers to start before issuing transactions
+                        sleep(5);
                         client->ProcessTransactions(set.transactions);
                     }
                     break;
@@ -67,20 +68,16 @@ void mainloop(CSVReader* reader, AppClient* client) {
                 case types::PRINT_LOG:
                     logs.clear();
                     client->GetLogs(c.serverName, logs, info);
+                    std::cout << "===== Set number " << setNo << " =====" << std::endl;
                     std::cout << "Log on " << c.serverName << ": " << std::endl;
-                    
-                    // printf("%20sindex|");
                     std::cout << std::setw(20) << "index|";
                     for (int i = 0; i < logs.size(); i++) {
-                        // printf("%10s%d|", logs[i].t.id);
                         std::cout << std::setw(10) << logs[i].t.id << "|";
                     }
                     std::cout << std::endl;
 
-                    // printf("%20stransaction|");
                     std::cout << std::setw(20) << "transaction|";
                     for (int i = 0; i < logs.size(); i++) {
-                        // printf("%10s(%s, %s, %d)|", logs[i].t.sender.c_str(), logs[i].t.receiver.c_str(), logs[i].t.amount);
                         std::string t = "(" + logs[i].t.sender + ", " + logs[i].t.receiver + ", " + std::to_string(logs[i].t.amount) + ")";
                         std::cout << std::setw(10) << t << "|";
                     }
@@ -104,9 +101,9 @@ void mainloop(CSVReader* reader, AppClient* client) {
                     }
                     std::cout << std::endl;
 
-                    std::cout << "Last committed: " << info.lastCommitted << std::endl;
+                    // std::cout << "Last committed: " << info.lastCommitted << std::endl;
                     std::cout << "Last executed: " << info.lastExecuted << std::endl;
-                    std::cout << "Last checkpoint: " << info.lastCheckpoint << std::endl;
+                    // std::cout << "Last checkpoint: " << info.lastCheckpoint << std::endl;
                     std::cout << "Last stable checkpoint: " << info.lastStableCheckpoint << std::endl;
 
                     break;
@@ -114,6 +111,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
                 case types::PRINT_DB:
                     db.clear();
                     client->GetDb(db, set.aliveServers);
+                    std::cout << "===== Set number " << setNo << " =====" << std::endl;
                     std::cout << "DB:" << std::endl;
 
                     std::cout << std::setw(11) << "Server|";
@@ -135,6 +133,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
                 case types::PRINT_STATUS:
                     status.clear();
                     client->GetStatus(c.sequenceNum, status);
+                    std::cout << "===== Set number " << setNo << " =====" << std::endl;
                     std::cout << std::setw(10) << "Server" << "|";
                     for (int i = 0; i < Constants::serverAddresses.size(); i++) {
                         std::cout << std::setw(10) << "S" + std::to_string(i + 1) << "|";
@@ -159,6 +158,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
                         }
                     }
 
+                    std::cout << "===== Set number " << setNo << " =====" << std::endl;
                     std::cout << "querying " << serverName << " for view changes" << std::endl;
                     client->GetViewChanges(serverName, viewChanges);
                     std::cout << std::setw(21) << "View num|" << std::setw(20) << "Initiator|" << std::setw(20) << "Last st. CP";
@@ -173,6 +173,7 @@ void mainloop(CSVReader* reader, AppClient* client) {
 
                 case types::PRINT_PERFORMANCE:
                     performance = client->GetPerformance();
+                    std::cout << "===== Set number " << setNo << " =====" << std::endl;
                     std::cout << performance << " transactions/second" << std::endl;
                     break;
 

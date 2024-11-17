@@ -172,7 +172,6 @@ private:
                             status_ = FINISH;
                             break;
                         case types::PREPARE_OK:
-                            std::cout << "process pre prepare ok" << std::endl;
                             server_->processPrepareOk(prepareOkReq);
                             responder.Finish(reply, Status::OK, this);
                             status_ = FINISH;
@@ -444,7 +443,6 @@ private:
     int lastProposedView;
 
     int rpcTimeoutSeconds;
-    int viewChangeTimeoutSeconds;
     int viewChangeTimeoutDelta;
     int optimisticTimeoutSeconds;
     int retryTimeoutSeconds;
