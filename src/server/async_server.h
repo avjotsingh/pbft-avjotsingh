@@ -451,6 +451,7 @@ private:
 
     std::queue<std::future<void>> futures;
     std::map<int, std::map<int, ViewChangeReq>> viewChangeMessages;
+    std::map<int, std::map<int, ViewChangeReq>> selfTriggeredViewChangeMessages;
     std::map<int, std::map<long, bool>> lastExecutedResult;
     std::set<std::string> awaitedDigests;
 

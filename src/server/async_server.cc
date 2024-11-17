@@ -1066,6 +1066,8 @@ void PbftServerImpl::triggerViewChange(int viewNum) {
   state_ = VIEW_CHANGE;
   ViewChangeReq request;
   composeViewChangeRequest(viewNum, request);
+
+  selfTriggeredViewChangeMessages[viewNum][serverId] = request;
   
   // Broadcast the view change request
   sendViewChangeToAll(request);
@@ -1377,6 +1379,15 @@ void PbftServerImpl::GetViewChanges(GetViewChangesRes& reply) {
       ViewChangesResEntry* e = reply.add_view_changes();
       e->set_view_num(pair.first);
       e->set_initiator("S" + std::to_string(v.second.signature().server_id() + 1));
+      e->set_stable_checkpoint(v.second.data().last_checkpoint().c_seq_num());
+    }
+  }
+
+  for (auto& pair: selfTriggeredViewChangeMessages) {  
+    for (auto& v: pair.second) {
+      ViewChangesResEntry* e = reply.add_view_changes();
+      e->set_view_num(pair.first);
+      e->set_initiator("S" + std::to_string(serverId + 1));
       e->set_stable_checkpoint(v.second.data().last_checkpoint().c_seq_num());
     }
   }
