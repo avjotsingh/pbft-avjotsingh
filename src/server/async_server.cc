@@ -1237,7 +1237,8 @@ void PbftServerImpl::executePending() {
       notifyClient(log[i]->m.signature().server_id(), log[i]->m, result);
       
       // Checkpoint
-      if (i % checkpointStepSize == checkpointStepSize - 1) {
+      std::cout << "checkpoint step size " << checkpointStepSize << std::endl;
+      if (seq % checkpointStepSize == checkpointStepSize - 1) {
         checkpoint();
       }
       lastExecuted = seq;
