@@ -4,6 +4,5 @@
 /grpc
 /build
 *.db
-test/*
 src/thirdparty
 keys
