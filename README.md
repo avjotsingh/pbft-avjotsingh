@@ -132,3 +132,9 @@ The driver program needs a CSV. An example CSV file is available under the test 
 $ cd build
 $ ./driver <csv_filepath>
 ```
+
+
+## References
+1. Miguel Castro and Barbara Liskov. Practical byzantine fault tolerance. In Symposium on Operating Systems Design and Implementation (OSDI), pages 173–186. USENIX As- sociation, 1999.
+2. Miguel Castro and Barbara Liskov. Practical byzantine fault tolerance and proactive recovery. Transactions on Computer Systems (TOCS), 20(4):398–461, 2002.
+
